@@ -9,9 +9,11 @@ use libloading::Library;
 use std::{
     ffi::{CStr, CString, c_void},
     path::Path,
+    sync::{Mutex, MutexGuard},
 };
 
 type Result<T> = std::result::Result<T, String>;
+static RUNTIME_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct Pointer {
@@ -31,10 +33,14 @@ struct Runtime {
     _library: Library,
     shutdown: abi::Shutdown,
     interface: abi::GenericInterface,
+    _guard: MutexGuard<'static, ()>,
 }
 
 impl Runtime {
     fn connect() -> Result<Self> {
+        let guard = RUNTIME_LOCK
+            .try_lock()
+            .map_err(|_| "このプロセスは既に SteamVR に接続しています")?;
         let path = actions::runtime_dll().ok_or("SteamVR が見つかりません")?;
         // Only use the SteamVR installation DLL, never the process search path.
         let library = unsafe { Library::new(path) }.map_err(|error| error.to_string())?;
@@ -57,6 +63,7 @@ impl Runtime {
             _library: library,
             shutdown,
             interface,
+            _guard: guard,
         })
     }
 

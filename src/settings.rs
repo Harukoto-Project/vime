@@ -12,6 +12,25 @@ pub enum Destination {
     SteamVrInput,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persists_updates_and_leaves_the_last_valid_settings_on_validation_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut settings = Settings::default();
+        settings.save(directory.path()).unwrap();
+        settings.destination = Destination::SteamVrInput;
+        settings.hotkey = "Alt+F8".into();
+        settings.save(directory.path()).unwrap();
+        let mut invalid = settings.clone();
+        invalid.osc_port = 0;
+        assert!(invalid.save(directory.path()).is_err());
+        assert_eq!(Settings::load(directory.path()).unwrap(), settings);
+    }
+}
+
 impl Destination {
     pub fn label(self) -> &'static str {
         match self {

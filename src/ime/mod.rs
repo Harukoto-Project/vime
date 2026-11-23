@@ -92,6 +92,11 @@ impl Composer {
     }
 
     pub fn candidates(&self) -> Vec<String> {
+        if let Some((_, shortcode)) = self.shortcode() {
+            return emoji::lookup(shortcode)
+                .map(|entry| entry.symbol.to_owned())
+                .collect();
+        }
         let reading = self.reading();
         if reading.is_empty() {
             return Vec::new();
@@ -103,13 +108,34 @@ impl Composer {
         candidates.extend(emoji::lookup(&reading).map(|entry| entry.symbol.to_owned()));
         candidates.push(reading.clone());
         if self.language == Language::Japanese {
-            candidates.push(japanese::katakana(&reading));
+            let katakana = japanese::katakana(&reading);
+            if !candidates.contains(&katakana) {
+                candidates.push(katakana);
+            }
         }
         candidates
     }
 
     pub fn commit(&mut self) {
         self.replace_preedit(&self.reading());
+    }
+
+    pub fn select(&mut self, candidate: &str) {
+        if let Some((offset, _)) = self.shortcode() {
+            self.committed.truncate(offset);
+        }
+        self.replace_preedit(candidate);
+    }
+
+    fn shortcode(&self) -> Option<(usize, &str)> {
+        if self.language != Language::English {
+            return None;
+        }
+        let end = self.committed.trim_end_matches(':');
+        let (prefix, tag) = end.rsplit_once(':')?;
+        let valid_start = prefix.chars().next_back().is_none_or(char::is_whitespace);
+        (valid_start && tag.len() >= 2 && tag.bytes().all(|b| b.is_ascii_lowercase()))
+            .then_some((prefix.len(), tag))
     }
 
     pub fn replace_preedit(&mut self, candidate: &str) {
@@ -160,6 +186,16 @@ mod tests {
         composer.insert("A👩‍💻");
         composer.backspace();
         assert_eq!(composer.text(), "A");
+    }
+
+    #[test]
+    fn selecting_an_english_emoji_replaces_only_the_shortcode() {
+        let mut composer = Composer::default();
+        composer.set_language(Language::English);
+        composer.insert("Hello :cat:");
+        assert!(composer.candidates().contains(&"🐱".into()));
+        composer.select("🐱");
+        assert_eq!(composer.text(), "Hello 🐱");
     }
 
     #[test]

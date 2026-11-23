@@ -1,0 +1,477 @@
+use crate::{
+    hotkeys::Hotkeys,
+    keyboard::{self, Action, Keyboard},
+    overlay_surface::OverlaySurface,
+};
+use eframe::egui::{
+    self, Align, Button, Color32, FontData, FontDefinitions, FontFamily, Frame, Layout, Margin,
+    RichText, ScrollArea, Stroke, Ui, ViewportBuilder,
+};
+use std::{env, fs, path::PathBuf, sync::Arc, time::Duration};
+use vime::{
+    output,
+    settings::{Destination, Settings},
+    steamvr::{Pointer, SteamVr},
+};
+
+const BACKGROUND: Color32 = Color32::from_rgb(20, 26, 35);
+const PANEL: Color32 = Color32::from_rgb(29, 37, 49);
+const EDGE: Color32 = Color32::from_rgb(53, 67, 83);
+const INK: Color32 = Color32::from_rgb(241, 245, 251);
+const SECONDARY: Color32 = Color32::from_rgb(176, 192, 209);
+const ACCENT: Color32 = Color32::from_rgb(159, 211, 255);
+const ERROR: Color32 = Color32::from_rgb(255, 177, 168);
+
+pub fn run() -> eframe::Result {
+    let options = eframe::NativeOptions {
+        viewport: ViewportBuilder::default()
+            .with_inner_size([980., 826.])
+            .with_min_inner_size([670., 560.])
+            .with_app_id("org.harukoto.vime"),
+        renderer: eframe::Renderer::Glow,
+        ..Default::default()
+    };
+    eframe::run_native(
+        "ViME",
+        options,
+        Box::new(|creation| Ok(Box::new(App::new(creation)?))),
+    )
+}
+
+struct App {
+    directory: PathBuf,
+    settings: Settings,
+    draft: Settings,
+    hotkeys: Option<Hotkeys>,
+    keyboard: Keyboard,
+    surface: Result<OverlaySurface, String>,
+    vr: Option<SteamVr>,
+    pointer: Option<Pointer>,
+    steamvr_message: String,
+    settings_message: String,
+    settings_error: bool,
+}
+
+impl App {
+    fn new(creation: &eframe::CreationContext<'_>) -> std::io::Result<Self> {
+        let fonts = windows_fonts();
+        creation.egui_ctx.set_fonts(fonts.clone());
+        creation.egui_ctx.set_visuals(visuals());
+        let surface = creation
+            .gl
+            .clone()
+            .ok_or_else(|| "OpenGL を初期化できません".to_owned())
+            .and_then(|gl| OverlaySurface::new(gl, fonts));
+
+        let directory = Settings::directory()?;
+        let (settings, mut settings_message) = match Settings::load(&directory) {
+            Ok(settings) => (settings, String::new()),
+            Err(error) => (
+                Settings::default(),
+                format!("設定を読み込めませんでした ({error})"),
+            ),
+        };
+        let hotkeys = match Hotkeys::new(creation.egui_ctx.clone()) {
+            Ok(mut hotkeys) => {
+                match hotkeys.prepare(&settings.hotkey) {
+                    Ok(key) => hotkeys.activate(key),
+                    Err(error) => settings_message = error,
+                }
+                Some(hotkeys)
+            }
+            Err(error) => {
+                settings_message = format!("Windows ショートカットを初期化できません ({error})");
+                None
+            }
+        };
+        Ok(Self {
+            directory,
+            draft: settings.clone(),
+            settings,
+            hotkeys,
+            keyboard: Keyboard::new(),
+            surface,
+            vr: None,
+            pointer: None,
+            steamvr_message: String::new(),
+            settings_error: !settings_message.is_empty(),
+            settings_message,
+        })
+    }
+
+    fn apply_settings(&mut self) -> Result<(), String> {
+        self.draft.hotkey = self.draft.hotkey.trim().to_owned();
+        let prepared = match self.hotkeys.as_ref() {
+            Some(hotkeys) => Some(hotkeys.prepare(&self.draft.hotkey)?),
+            None if self.settings.hotkey != self.draft.hotkey => {
+                return Err("Windows ショートカットを設定できません".into());
+            }
+            None => None,
+        };
+        if let Err(error) = self.draft.save(&self.directory) {
+            if let (Some(hotkeys), Some(key)) = (&self.hotkeys, prepared) {
+                hotkeys.cancel(key);
+            }
+            return Err(format!("設定を保存できません ({error})"));
+        }
+        if let (Some(hotkeys), Some(key)) = (&mut self.hotkeys, prepared) {
+            hotkeys.activate(key);
+        }
+        self.settings = self.draft.clone();
+        if let Some(vr) = &mut self.vr
+            && let Err(error) = vr.set_width(self.settings.overlay_width)
+        {
+            self.steamvr_message = error;
+        }
+        Ok(())
+    }
+
+    fn connect(&mut self) {
+        if let Err(error) = &self.surface {
+            self.steamvr_message = error.clone();
+            return;
+        }
+        match SteamVr::connect(&self.directory) {
+            Ok(vr) => {
+                self.steamvr_message.clear();
+                self.vr = Some(vr);
+            }
+            Err(error) => self.steamvr_message = error,
+        }
+    }
+
+    fn toggle(&mut self) {
+        let Some(vr) = &mut self.vr else {
+            self.steamvr_message = "先に SteamVR に接続してください".into();
+            return;
+        };
+        let new_visibility = !vr.visible();
+        let result = if new_visibility {
+            vr.position(self.settings.overlay_width)
+        } else {
+            vr.hide()
+        };
+        self.steamvr_message = result.err().unwrap_or_default();
+        if let Ok(surface) = &mut self.surface {
+            surface.reset();
+        }
+        self.pointer = None;
+    }
+
+    fn keyboard_action(&mut self, action: Action) {
+        match action {
+            Action::Close => {
+                if self.vr.as_ref().is_some_and(SteamVr::visible) {
+                    self.toggle();
+                }
+            }
+            Action::Send => {
+                let text = self.keyboard.composer.text();
+                let sent = match self.settings.destination {
+                    Destination::Osc => {
+                        output::send_osc(&text, self.settings.osc_port, self.settings.osc_notify)
+                            .map(|_| "OSCパケットを送信しました")
+                    }
+                    Destination::SteamVrInput => output::send_scene_input(
+                        self.vr.as_ref().map_or(0, SteamVr::scene_pid),
+                        &text,
+                    )
+                    .map(|_| "入力イベントを送信しました"),
+                };
+                match sent {
+                    Ok(message) => {
+                        self.keyboard.clear();
+                        self.keyboard.status(message);
+                    }
+                    Err(error) => self.keyboard.status(error.to_string()),
+                }
+            }
+            action => self.keyboard.apply(action),
+        }
+    }
+
+    fn paint_overlay(&mut self) {
+        if let (Some(vr), Ok(surface)) = (&self.vr, &mut self.surface)
+            && vr.visible()
+            && let Some((pixels, action)) =
+                surface.render(&self.keyboard, self.settings.destination, self.pointer)
+        {
+            if let Err(error) = vr.upload(pixels, keyboard::SIZE[0], keyboard::SIZE[1]) {
+                self.toggle();
+                self.steamvr_message = error;
+            } else if let Some(action) = action {
+                self.keyboard_action(action);
+            }
+        }
+    }
+
+    fn page(&mut self, ui: &mut Ui) {
+        ui.set_max_width(ui.available_width().min(1080.));
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(RichText::new("ViME").size(35.).strong().color(INK));
+                ui.label(
+                    RichText::new("SteamVR向け IMEキーボード")
+                        .size(15.)
+                        .color(SECONDARY),
+                );
+            });
+        });
+        ui.add_space(17.);
+        self.steamvr_panel(ui);
+        ui.add_space(18.);
+        self.settings_panel(ui);
+        ui.add_space(17.);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("キーボードプレビュー").size(18.).strong());
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.label(
+                    RichText::new(self.settings.destination.label())
+                        .size(13.)
+                        .color(SECONDARY),
+                );
+            });
+        });
+        ui.add_space(5.);
+        let width = ui.available_width().min(900.);
+        if let Some(action) = keyboard::show(
+            ui,
+            &self.keyboard,
+            width,
+            self.settings.destination,
+            None,
+            false,
+        ) {
+            self.keyboard_action(action);
+            ui.ctx().request_repaint();
+        }
+    }
+
+    fn steamvr_panel(&mut self, ui: &mut Ui) {
+        panel().show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("SteamVR").size(17.).strong());
+                    let status = match &self.vr {
+                        Some(vr) if vr.visible() => "接続済み · キーボード表示中",
+                        Some(_) => "接続済み",
+                        None => "未接続",
+                    };
+                    ui.label(RichText::new(status).color(if self.vr.is_some() {
+                        ACCENT
+                    } else {
+                        SECONDARY
+                    }));
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if let Some(vr) = &self.vr {
+                        let visible = vr.visible();
+                        if ui.button("切断").clicked() {
+                            self.vr = None;
+                            self.pointer = None;
+                            self.steamvr_message.clear();
+                            return;
+                        }
+                        if ui.button("コントローラーバインドを編集").clicked() {
+                            self.steamvr_message = vr.open_bindings().err().unwrap_or_default();
+                        }
+                        if ui
+                            .add(Button::new(if visible {
+                                "キーボードを閉じる"
+                            } else {
+                                "キーボードを開く"
+                            }))
+                            .clicked()
+                        {
+                            self.toggle();
+                        }
+                    } else if ui.add(primary("SteamVR に接続")).clicked() {
+                        self.connect();
+                    }
+                });
+            });
+            if !self.steamvr_message.is_empty() {
+                ui.label(RichText::new(&self.steamvr_message).color(ERROR));
+            }
+        });
+    }
+
+    fn settings_panel(&mut self, ui: &mut Ui) {
+        panel().show(ui, |ui| {
+            ui.label(RichText::new("設定").size(18.).strong());
+            ui.add_space(5.);
+            ui.columns(2, |columns| {
+                let [destination, binding] = columns else {
+                    unreachable!("two settings columns")
+                };
+                destination.label(RichText::new("送信先").color(SECONDARY));
+                destination.horizontal_wrapped(|ui| {
+                    ui.selectable_value(
+                        &mut self.draft.destination,
+                        Destination::Osc,
+                        Destination::Osc.label(),
+                    );
+                    ui.selectable_value(
+                        &mut self.draft.destination,
+                        Destination::SteamVrInput,
+                        Destination::SteamVrInput.label(),
+                    );
+                });
+                if self.draft.destination == Destination::Osc {
+                    destination.horizontal_wrapped(|ui| {
+                        ui.label("UDP ポート");
+                        ui.add(egui::DragValue::new(&mut self.draft.osc_port).range(1..=65535));
+                        ui.checkbox(&mut self.draft.osc_notify, "チャット通知音");
+                    });
+                    destination.label(
+                        RichText::new("VRChat側でOSCを有効にしてください")
+                            .size(12.)
+                            .color(SECONDARY),
+                    );
+                } else {
+                    destination.label(
+                        RichText::new("VRアプリの入力欄を開き、Windowsで前面にします")
+                            .size(12.)
+                            .color(SECONDARY),
+                    );
+                }
+
+                binding.label(RichText::new("Windows 開閉ショートカット").color(SECONDARY));
+                binding.add(
+                    egui::TextEdit::singleline(&mut self.draft.hotkey)
+                        .hint_text("Ctrl+Shift+F8")
+                        .desired_width(200.),
+                );
+                binding.horizontal_wrapped(|ui| {
+                    ui.label("キーボード幅");
+                    ui.add(
+                        egui::Slider::new(&mut self.draft.overlay_width, 0.65..=1.65).suffix(" m"),
+                    );
+                });
+            });
+            ui.add_space(10.);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&self.settings_message).small().color(
+                    if self.settings_error {
+                        ERROR
+                    } else {
+                        SECONDARY
+                    },
+                ));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui
+                        .add_enabled(self.draft != self.settings, primary("設定を保存"))
+                        .clicked()
+                    {
+                        match self.apply_settings() {
+                            Ok(()) => {
+                                self.settings_error = false;
+                                self.settings_message = "設定を保存しました".into();
+                            }
+                            Err(error) => {
+                                self.settings_error = true;
+                                self.settings_message = error;
+                            }
+                        }
+                    }
+                });
+            });
+        });
+    }
+}
+
+impl eframe::App for App {
+    fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.hotkeys.as_ref().is_some_and(Hotkeys::pressed) {
+            self.toggle();
+        }
+        if let Some(vr) = &mut self.vr {
+            let frame = vr.poll(keyboard::ASPECT);
+            self.pointer = frame.pointer;
+            if frame.quit {
+                self.vr = None;
+                self.pointer = None;
+                self.steamvr_message = "SteamVR との接続が終了しました".into();
+            } else if frame.toggle {
+                self.toggle();
+            }
+        }
+        if let Some(vr) = &self.vr {
+            let visible = vr.visible();
+            if visible {
+                context.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
+            }
+            context.request_repaint_after(Duration::from_millis(if visible { 16 } else { 33 }));
+        }
+    }
+
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        self.paint_overlay();
+        // The root ui is rebuilt by eframe, including after a hidden-window VR frame.
+        Frame::new()
+            .fill(BACKGROUND)
+            .inner_margin(Margin::symmetric(27, 18))
+            .show(ui, |ui| {
+                ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| self.page(ui));
+            });
+    }
+
+    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        if gl.is_some()
+            && let Ok(surface) = std::mem::replace(&mut self.surface, Err(String::new()))
+        {
+            surface.destroy();
+        }
+    }
+}
+
+fn primary(label: &str) -> Button<'_> {
+    Button::new(RichText::new(label).color(BACKGROUND).strong()).fill(ACCENT)
+}
+
+fn panel() -> Frame {
+    Frame::new()
+        .fill(PANEL)
+        .stroke(Stroke::new(1., EDGE))
+        .corner_radius(12)
+        .inner_margin(Margin::symmetric(16, 12))
+}
+
+fn visuals() -> egui::Visuals {
+    let mut visuals = egui::Visuals::dark();
+    visuals.override_text_color = Some(INK);
+    visuals.panel_fill = BACKGROUND;
+    visuals.extreme_bg_color = BACKGROUND;
+    visuals.selection.bg_fill = Color32::from_rgb(53, 88, 119);
+    visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(41, 52, 68);
+    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(57, 73, 93);
+    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(70, 90, 113);
+    visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
+    visuals
+}
+
+fn windows_fonts() -> FontDefinitions {
+    let mut fonts = FontDefinitions::default();
+    if let Some(windows) = env::var_os("WINDIR") {
+        let folder = PathBuf::from(windows).join("Fonts");
+        for (name, file) in [
+            ("meiryo", "meiryo.ttc"),
+            ("malgun", "malgun.ttf"),
+            ("emoji", "seguiemj.ttf"),
+        ] {
+            if let Ok(data) = fs::read(folder.join(file)) {
+                fonts
+                    .font_data
+                    .insert(name.to_owned(), Arc::new(FontData::from_owned(data)));
+                fonts
+                    .families
+                    .entry(FontFamily::Proportional)
+                    .or_default()
+                    .push(name.to_owned());
+            }
+        }
+    }
+    fonts
+}
