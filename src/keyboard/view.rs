@@ -42,12 +42,12 @@ pub fn show(
     if keyboard.emoji {
         view.emoji(keyboard);
     } else {
-        view.keys(keyboard);
+        view.keys(keyboard, destination);
     }
     if let Some(pointer) = vr_pointer {
         let painter = view.ui.painter();
-        painter.circle_filled(pointer, 5.0, DARK_INK);
-        painter.circle_filled(pointer, 3.0, ACCENT);
+        painter.circle_filled(pointer, 6.0, DARK_INK);
+        painter.circle_filled(pointer, 3.5, ACCENT);
     }
     view.action
 }
@@ -65,6 +65,7 @@ enum Face {
     Subtle,
     Selected,
     Primary,
+    Disabled,
 }
 
 impl Board<'_> {
@@ -112,15 +113,15 @@ impl Board<'_> {
             24.,
             INK,
         );
-        let track = self.box_at(277., 17., 306., 34.);
+        let track = self.box_at(248., 15., 348., 40.);
         self.ui
             .painter()
             .rect_filled(track, 10. * self.scale, Color32::from_black_alpha(59));
         for (index, language) in Language::ALL.into_iter().enumerate() {
             self.button(
-                self.box_at(280. + index as f32 * 100., 20., 100., 28.),
+                self.box_at(251. + index as f32 * 114., 18., 114., 34.),
                 language.label(),
-                15.,
+                17.,
                 if language == keyboard.composer.language() {
                     Face::Selected
                 } else {
@@ -130,9 +131,9 @@ impl Board<'_> {
             );
         }
         self.button(
-            self.box_at(if can_close { 710. } else { 760. }, 18., 77., 32.),
+            self.box_at(if can_close { 664. } else { 746. }, 15., 91., 40.),
             "絵文字",
-            14.,
+            16.,
             if keyboard.emoji {
                 Face::Selected
             } else {
@@ -142,10 +143,10 @@ impl Board<'_> {
         );
         if can_close {
             self.button(
-                self.box_at(799., 18., 38., 32.),
-                "×",
-                22.,
-                Face::Subtle,
+                self.box_at(766., 15., 71., 40.),
+                "閉じる",
+                16.,
+                Face::Key,
                 Action::Close,
             );
         }
@@ -205,25 +206,37 @@ impl Board<'_> {
                 },
             );
         }
-        if !keyboard.status.is_empty() {
-            self.label(
-                self.box_at(36., 106., 695., 21.),
-                Align2::LEFT_CENTER,
-                &keyboard.status,
-                13.,
-                ACCENT,
-            );
-        }
+        let route = match destination {
+            Destination::Osc => "送信先  VRChat Chatbox",
+            Destination::SteamVrInput => "送信先  VRアプリの入力欄",
+        };
+        let (detail, color) = if keyboard.status.is_empty() {
+            (route, SECONDARY)
+        } else {
+            (keyboard.status.as_str(), ACCENT)
+        };
+        self.label(
+            self.box_at(36., 106., 695., 21.),
+            Align2::LEFT_CENTER,
+            detail,
+            14.,
+            color,
+        );
     }
 
     fn candidates(&mut self, keyboard: &Keyboard) {
         let values = &keyboard.candidates;
         if values.is_empty() {
+            let hint = match keyboard.composer.language() {
+                Language::Japanese => "ローマ字で入力し、候補を選んで変換",
+                Language::English => "絵文字は一覧または :cat: などの短縮名から選択",
+                Language::Korean => "2ボル式で入力",
+            };
             self.label(
-                self.box_at(24., 141., 500., 36.),
+                self.box_at(24., 141., 660., 36.),
                 Align2::LEFT_CENTER,
-                "変換候補",
-                13.,
+                hint,
+                15.,
                 SECONDARY,
             );
             return;
@@ -258,9 +271,13 @@ impl Board<'_> {
         }
     }
 
-    fn keys(&mut self, keyboard: &Keyboard) {
+    fn keys(&mut self, keyboard: &Keyboard, destination: Destination) {
         let shift = keyboard.shift;
         let lang = keyboard.composer.language();
+        let text = keyboard.composer.text();
+        let has_text = !text.is_empty();
+        let can_send = !text.trim().is_empty()
+            && (destination != Destination::Osc || text.encode_utf16().count() <= CHAT_LIMIT);
         let numbers = if shift {
             "!@#$%^&*()_+"
         } else {
@@ -274,13 +291,18 @@ impl Board<'_> {
         );
         self.row(232., letters("qwertyuiop[]", "QWERTYUIOP{}", shift, lang));
         let mut middle: Vec<_> = letters("asdfghjkl;'", "ASDFGHJKL:\"", shift, lang).collect();
-        middle.push(("削除".to_owned(), 1.25, Action::Backspace, Face::Subtle));
+        middle.push((
+            "削除".to_owned(),
+            1.4,
+            Action::Backspace,
+            if has_text { Face::Key } else { Face::Disabled },
+        ));
         self.row(276., middle);
         let lower = [(
-            "⇧".to_owned(),
+            "Shift".to_owned(),
             1.45,
             Action::Shift,
-            if shift { Face::Selected } else { Face::Subtle },
+            if shift { Face::Selected } else { Face::Key },
         )]
         .into_iter()
         .chain(letters("zxcvbnm,./", "ZXCVBNM<>?", shift, lang));
@@ -288,10 +310,37 @@ impl Board<'_> {
         self.row(
             364.,
             [
-                ("全消去".into(), 1.1, Action::Clear, Face::Subtle),
-                ("確定".into(), 1.28, Action::Commit, Face::Key),
-                ("スペース".into(), 4.6, Action::Space, Face::Key),
-                ("送信 ↗".into(), 1.8, Action::Send, Face::Primary),
+                (
+                    "全消去".into(),
+                    1.2,
+                    Action::Clear,
+                    if has_text {
+                        Face::Subtle
+                    } else {
+                        Face::Disabled
+                    },
+                ),
+                (
+                    "確定".into(),
+                    1.35,
+                    Action::Commit,
+                    if keyboard.composer.preedit().is_empty() {
+                        Face::Disabled
+                    } else {
+                        Face::Key
+                    },
+                ),
+                ("スペース".into(), 4.3, Action::Space, Face::Key),
+                (
+                    "送信 ↗".into(),
+                    2.,
+                    Action::Send,
+                    if can_send {
+                        Face::Primary
+                    } else {
+                        Face::Disabled
+                    },
+                ),
             ],
         );
     }
@@ -306,7 +355,7 @@ impl Board<'_> {
             let width = unit * weight;
             let font_size = if label.chars().count() > 2 { 16. } else { 21. };
             self.button(
-                self.box_at(x, y, width, 38.),
+                self.box_at(x, y, width, 40.),
                 &label,
                 font_size,
                 face,
@@ -380,14 +429,30 @@ impl Board<'_> {
             (rect.top() - self.rect.top()) as i32,
             label,
         ));
-        let response = self
-            .ui
-            .interact(rect, id, Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+        let enabled = !matches!(face, Face::Disabled);
+        let response = self.ui.interact(
+            rect,
+            id,
+            if enabled {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
+        );
+        let response = if enabled {
+            response.on_hover_cursor(egui::CursorIcon::PointingHand)
+        } else {
+            response
+        };
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
         let pressed = response.is_pointer_button_down_on();
         let hovered = response.hovered();
         let (fill, border, text) = match face {
+            Face::Disabled => (
+                Color32::from_white_alpha(8),
+                Color32::from_white_alpha(19),
+                Color32::from_rgb(137, 151, 167),
+            ),
             Face::Primary => (
                 if pressed {
                     Color32::from_rgb(116, 183, 235)
@@ -406,11 +471,11 @@ impl Board<'_> {
             ),
             Face::Subtle | Face::Key => (
                 Color32::from_white_alpha(if pressed {
-                    54
+                    67
                 } else if hovered {
-                    38
+                    45
                 } else if matches!(face, Face::Key) {
-                    17
+                    23
                 } else {
                     0
                 }),
