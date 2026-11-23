@@ -221,6 +221,25 @@ impl Composer {
         before.to_owned() + &self.reading() + after
     }
 
+    /// Replace a range in the finalized editor text while retaining its caret.
+    pub fn replace_text(&mut self, range: std::ops::Range<usize>, replacement: &str) -> bool {
+        let text = self.text();
+        if self.converting() || text.get(range.clone()).is_none() {
+            return false;
+        }
+        self.commit();
+        let caret = if self.caret >= range.end {
+            self.caret - range.len() + replacement.len()
+        } else if self.caret > range.start {
+            range.start + replacement.len()
+        } else {
+            self.caret
+        };
+        self.committed.replace_range(range, replacement);
+        self.caret = self.boundary_at_or_after(caret);
+        true
+    }
+
     pub fn candidates(&self) -> Vec<String> {
         if self.conversion.is_some() {
             return Vec::new();

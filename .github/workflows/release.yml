@@ -52,6 +52,22 @@ jobs:
           New-Item -ItemType Directory -Path "dist/$name/assets" -Force | Out-Null
           Copy-Item target/release/vime.exe, LICENSE, README.md, README.ja.md, README.ko.md, CONTRIBUTING.md "dist/$name"
           Copy-Item assets/vr-keyboard.png, assets/vr-conversion.png "dist/$name/assets"
+          $engines = Get-Content src/local_d1/engine.json -Raw | ConvertFrom-Json
+          $runtimeFiles = @($engines.files)
+          foreach ($engine in @($engines.cpu, $engines.vulkan)) {
+            $archive = "target/llama-$($engine.directory).zip"
+            $runtime = "dist/$name/llama/$($engine.directory)"
+            Invoke-WebRequest -Uri $engine.url -OutFile $archive
+            if ((Get-Item $archive).Length -ne $engine.bytes -or (Get-FileHash $archive).Hash -ne $engine.sha256) {
+              throw "llama.cpp runtime checksum mismatch"
+            }
+            New-Item -ItemType Directory -Path $runtime -Force | Out-Null
+            tar.exe -xf $archive -C $runtime @runtimeFiles
+            if ($LASTEXITCODE -ne 0) { throw "Could not extract llama.cpp runtime" }
+            Copy-Item src/local_d1/LLAMA_LICENSE "$runtime/LICENSE-llama.cpp"
+          }
+          & "dist/$name/llama/$($engines.cpu.directory)/llama-server.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "Could not start bundled llama.cpp runtime" }
           Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
           $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $name.zip" | Set-Content -Encoding ascii "dist/$name.zip.sha256"
