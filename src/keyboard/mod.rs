@@ -194,6 +194,13 @@ impl Keyboard {
         }
     }
 
+    /// Picks up a misconversion table that was just downloaded or removed.
+    pub fn reload_misconversions(&self) {
+        if let Some(typo) = &self.typo {
+            typo.reload_misconversions();
+        }
+    }
+
     pub fn warm_local_typo(&self) {
         if let Some(typo) = &self.typo {
             typo.warm_local();

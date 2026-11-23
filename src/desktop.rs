@@ -24,7 +24,7 @@ use vime::{
     calibration::{self, Profile},
     i18n::{self, Lang, tr, tr_args},
     local_d1::{self, Download},
-    output,
+    misconversions, output,
     settings::{D1Device, Destination, Settings, TypoProvider, TypoSettings},
     steamvr::{Pointer, SteamVr, Surface},
 };
@@ -98,6 +98,8 @@ struct App {
     api_key_before_url: Option<(TypoProvider, String)>,
     model_download: Option<Download>,
     model_error: Option<std::io::Error>,
+    misconversion_download: Option<misconversions::Download>,
+    misconversion_error: Option<std::io::Error>,
     calibration_job: Option<(String, CalibrationJob)>,
     calibration_error: Option<(String, std::io::Error)>,
     calibration_attempts: HashMap<String, Instant>,
@@ -196,6 +198,8 @@ impl App {
             api_key_edits: HashMap::new(),
             api_key_before_url: None,
             model_download: None,
+            misconversion_download: None,
+            misconversion_error: None,
             model_error: None,
             calibration_job: None,
             calibration_error: None,
@@ -772,6 +776,7 @@ impl App {
             );
         }
         self.calibration_panel(ui);
+        self.misconversion_panel(ui);
         if self.draft.typo == self.settings.typo
             && let Some(error) = self.keyboard.typo_error()
         {
@@ -931,6 +936,95 @@ impl App {
             ui.label(
                 RichText::new(tr_args(
                     "モデルを取得できませんでした ({0})",
+                    &[&error.to_string()],
+                ))
+                .color(ERROR),
+            );
+        }
+    }
+
+    /// The optional Japanese misconversion table. The dataset is fetched from
+    /// Kyoto University only when the user asks and is counted on this PC.
+    fn misconversion_panel(&mut self, ui: &mut Ui) {
+        ui.add_space(8.);
+        ui.label(RichText::new(tr("日本語の誤変換データ（任意）")).color(SECONDARY));
+        if let Some(download) = &self.misconversion_download {
+            if download.summarizing() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(tr("データを集計しています"));
+                });
+            } else {
+                let received = download.received();
+                let total = misconversions::DATA_BYTES;
+                ui.add(
+                    egui::ProgressBar::new(received as f32 / total as f32).text(format!(
+                        "{:.0} / {:.0} MB",
+                        received as f64 / 1_000_000.,
+                        total as f64 / 1_000_000.
+                    )),
+                );
+            }
+            if ui
+                .add_enabled(
+                    !download.cancelling(),
+                    Button::new(tr("ダウンロードを中止")),
+                )
+                .clicked()
+            {
+                download.cancel();
+            }
+            ui.ctx().request_repaint_after(Duration::from_millis(150));
+        } else if misconversions::installed(&self.directory) {
+            ui.label(tr("誤変換データを取得済み"));
+            if ui.small_button(tr("取得したデータを削除")).clicked() {
+                match misconversions::remove(&self.directory) {
+                    Ok(()) => {
+                        self.misconversion_error = None;
+                        self.keyboard.reload_misconversions();
+                    }
+                    Err(error) => self.misconversion_error = Some(error),
+                }
+            }
+        } else {
+            ui.label(
+                RichText::new(tr(
+                    "直されやすい漢字の語を、京都大学の公開データから集計して使います",
+                ))
+                .small(),
+            );
+            let megabytes = misconversions::DATA_BYTES as f64 / 1_000_000.;
+            if ui
+                .button(tr_args(
+                    "ダウンロード（約 {0} MB）",
+                    &[&format!("{megabytes:.0}")],
+                ))
+                .clicked()
+            {
+                let context = ui.ctx().clone();
+                self.misconversion_error = None;
+                match misconversions::Download::start(self.directory.clone(), move || {
+                    context.request_repaint()
+                }) {
+                    Ok(download) => self.misconversion_download = Some(download),
+                    Err(error) => self.misconversion_error = Some(error),
+                }
+            }
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.hyperlink_to(
+                tr("出典: 日本語Wikipedia入力誤りデータセット（京都大学）"),
+                misconversions::SOURCE_PAGE,
+            );
+            ui.hyperlink_to(
+                tr("データのライセンス（CC BY-SA 3.0）"),
+                misconversions::LICENSE,
+            );
+        });
+        if let Some(error) = &self.misconversion_error {
+            ui.label(
+                RichText::new(tr_args(
+                    "誤変換データを取得できませんでした ({0})",
                     &[&error.to_string()],
                 ))
                 .color(ERROR),
@@ -1162,6 +1256,17 @@ impl eframe::App for App {
                 self.calibration_check = Instant::now();
                 self.keyboard.warm_local_typo();
             }
+        }
+        if let Some(result) = self
+            .misconversion_download
+            .as_ref()
+            .and_then(misconversions::Download::result)
+        {
+            self.misconversion_download = None;
+            self.misconversion_error = result
+                .err()
+                .filter(|error| error.kind() != std::io::ErrorKind::Interrupted);
+            self.keyboard.reload_misconversions();
         }
         self.poll_calibration(context);
         if i18n::language() != self.draft.language {

@@ -59,3 +59,7 @@ The executable is built at `target/release/vime.exe`. See the [contribution guid
 ## License
 
 [Apache License 2.0](LICENSE)
+
+### Data downloaded on request
+
+ViME contains no copy of the Japanese Wikipedia Typo Dataset. If you press **Download** under *Japanese misconversion data* in the settings, ViME fetches [JWTD v2](https://nlp.ist.i.kyoto-u.ac.jp/EN/index.php?JWTD) (Kyoto University Language Media Processing Lab, [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/)) directly from Kyoto University and counts which kanji words editors corrected. Only that table of words is kept, in `%LOCALAPPDATA%\ViME\misconversions.tsv`; it is not shared and stays under CC BY-SA 3.0. Tanaka, Murawaki, Kawahara and Kurohashi, *Building a Japanese Typo Dataset from Wikipedia's Revision History*, ACL 2020 Student Research Workshop.

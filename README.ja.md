@@ -59,3 +59,7 @@ cargo run --release --locked
 ## ライセンス
 
 [Apache License 2.0](LICENSE)
+
+### 要求したときだけ取得するデータ
+
+ViME には日本語Wikipedia入力誤りデータセットの複製は含まれません。設定の「日本語の誤変換データ」で **ダウンロード** を押すと、ViME が京都大学から [JWTD v2](https://nlp.ist.i.kyoto-u.ac.jp/EN/index.php?JWTD)（京都大学 言語メディア研究室、[CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.ja)）を直接取得し、編集者が直した漢字の語を集計します。残るのはその語の表だけで、`%LOCALAPPDATA%\ViME\misconversions.tsv` に保存されます。この表は共有されず、CC BY-SA 3.0 のままです。出典: 田中佑, 村脇有吾, 河原大輔, 黒橋禎夫. 日本語Wikipediaの編集履歴に基づく入力誤りデータセットと訂正システムの改良. 言語処理学会第27回年次大会, 2021.

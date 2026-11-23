@@ -37,6 +37,7 @@ use windows_sys::Win32::{
 use crate::{i18n::tr, settings::D1Device, system_one::Client};
 
 pub use download::{Download, MODEL_LICENSE, installed, model_available, required_bytes};
+pub(crate) use download::{Progress, fetch};
 
 // The quantized model's probabilities are calibrated independently of the API.
 pub const MIN_LEARN_PROBABILITY: f64 = 0.72;

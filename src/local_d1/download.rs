@@ -131,13 +131,13 @@ impl Drop for Download {
 }
 
 #[derive(Default)]
-struct Progress {
-    received: AtomicU64,
-    cancelled: AtomicBool,
+pub(crate) struct Progress {
+    pub(crate) received: AtomicU64,
+    pub(crate) cancelled: AtomicBool,
 }
 
 impl Progress {
-    fn check(&self) -> io::Result<()> {
+    pub(crate) fn check(&self) -> io::Result<()> {
         if self.cancelled.load(Relaxed) {
             Err(io::ErrorKind::Interrupted.into())
         } else {
@@ -241,7 +241,7 @@ fn extract_archive(tar: &Path, archive: &Path, tools: &Path, asset: &Archive) ->
     Ok(())
 }
 
-fn fetch(
+pub(crate) fn fetch(
     url: &str,
     bytes: u64,
     expected: &str,

@@ -59,3 +59,7 @@ cargo run --release --locked
 ## 라이선스
 
 [Apache License 2.0](LICENSE)
+
+### 요청할 때만 받는 데이터
+
+ViME에는 일본어 Wikipedia 입력 오류 데이터셋의 사본이 들어 있지 않습니다. 설정의 「일본어 오변환 데이터」에서 **다운로드**를 누르면 ViME가 교토대학에서 [JWTD v2](https://nlp.ist.i.kyoto-u.ac.jp/EN/index.php?JWTD)(교토대학 언어미디어 연구실, [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.ko))를 직접 받아 편집자가 고친 한자어를 집계합니다. 남는 것은 그 단어 표뿐이며 `%LOCALAPPDATA%\ViME\misconversions.tsv`에 저장됩니다. 이 표는 공유되지 않고 CC BY-SA 3.0 그대로입니다. 출처: Tanaka, Murawaki, Kawahara, Kurohashi, *Building a Japanese Typo Dataset from Wikipedia's Revision History*, ACL 2020 Student Research Workshop.

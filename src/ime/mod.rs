@@ -2,6 +2,7 @@ mod conversion;
 mod emoji;
 mod japanese;
 mod korean;
+pub mod misconversion;
 
 use unicode_segmentation::UnicodeSegmentation;
 

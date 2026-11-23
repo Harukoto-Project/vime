@@ -146,3 +146,14 @@ CUDA 推論を開始できません。対応する NVIDIA GPU、ドライバー�
 {0}件を削除する	Delete {0} entries	{0}개 삭제
 キャンセル	Cancel	취소
 学習済みの誤字を削除できませんでした ({0})	Could not delete learned typos ({0})	학습된 오타를 삭제할 수 없습니다 ({0})
+日本語の誤変換データ（任意）	Japanese misconversion data (optional)	일본어 오변환 데이터(선택)
+データを集計しています	Counting the data	데이터를 집계하는 중
+誤変換データを取得済み	Misconversion data downloaded	오변환 데이터를 받음
+取得したデータを削除	Delete the downloaded data	받은 데이터 삭제
+直されやすい漢字の語を、京都大学の公開データから集計して使います	Uses words that are often corrected, counted from Kyoto University's public data	교토대학의 공개 데이터에서 자주 고쳐지는 한자어를 집계해 사용합니다
+ダウンロード（約 {0} MB）	Download (about {0} MB)	다운로드(약 {0} MB)
+出典: 日本語Wikipedia入力誤りデータセット（京都大学）	Source: Japanese Wikipedia Typo Dataset (Kyoto University)	출처: 일본어 Wikipedia 입력 오류 데이터셋(교토대학)
+データのライセンス（CC BY-SA 3.0）	Data license (CC BY-SA 3.0)	데이터 라이선스(CC BY-SA 3.0)
+誤変換データを取得できませんでした ({0})	Could not get the misconversion data ({0})	오변환 데이터를 받을 수 없습니다 ({0})
+誤変換データを展開できませんでした	Could not unpack the misconversion data	오변환 데이터의 압축을 풀 수 없습니다
+誤変換データを集計できませんでした	Could not count the misconversion data	오변환 데이터를 집계할 수 없습니다
