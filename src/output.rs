@@ -1,0 +1,117 @@
+use std::{
+    io,
+    net::{Ipv4Addr, SocketAddrV4, UdpSocket},
+};
+
+pub const CHAT_LIMIT: usize = 144;
+
+// VRChat's chatbox accepts an OSC string followed by the immediate-send and notification flags.
+pub fn chat_packet(text: &str, notify: bool) -> io::Result<Vec<u8>> {
+    if text.trim().is_empty() || text.contains('\0') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "送信する文章を入力してください",
+        ));
+    }
+    if text.encode_utf16().count() > CHAT_LIMIT || text.lines().count() > 9 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "VRChat の上限は144文字・9行です",
+        ));
+    }
+    let mut packet = Vec::new();
+    osc_string(&mut packet, "/chatbox/input");
+    osc_string(&mut packet, if notify { ",sTT" } else { ",sTF" });
+    osc_string(&mut packet, text);
+    Ok(packet)
+}
+
+pub fn send_osc(text: &str, port: u16, notify: bool) -> io::Result<()> {
+    let packet = chat_packet(text, notify)?;
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+    socket.send_to(&packet, SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))?;
+    Ok(())
+}
+
+fn osc_string(packet: &mut Vec<u8>, value: &str) {
+    packet.extend_from_slice(value.as_bytes());
+    packet.resize((packet.len() + 1).next_multiple_of(4), 0);
+}
+
+#[cfg(windows)]
+pub fn send_scene_input(scene_pid: u32, text: &str) -> io::Result<()> {
+    use windows_sys::Win32::UI::{
+        Input::KeyboardAndMouse::{
+            INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+            SendInput,
+        },
+        WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
+    };
+
+    if text.trim().is_empty() || text.contains('\0') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "送信する文章を入力してください",
+        ));
+    }
+    let mut foreground_pid = 0;
+    // Only insert while the current SteamVR scene owns the foreground window.
+    unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground_pid) };
+    if scene_pid == 0 || scene_pid != foreground_pid {
+        return Err(io::Error::other(
+            "VRアプリの入力欄を開き、Windowsでそのアプリを前面にしてください",
+        ));
+    }
+    let keys: Vec<_> = text
+        .encode_utf16()
+        .flat_map(|unit| {
+            [KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP].map(|flags| INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wScan: unit,
+                        dwFlags: flags,
+                        ..Default::default()
+                    },
+                },
+            })
+        })
+        .collect();
+    let sent = unsafe { SendInput(keys.len() as u32, keys.as_ptr(), size_of::<INPUT>() as i32) };
+    if sent != keys.len() as u32 {
+        return Err(io::Error::other(format!(
+            "Windows が入力イベントを受け取れませんでした ({sent}/{})",
+            keys.len()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn sends_utf8_osc_to_a_loopback_receiver() {
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        send_osc("猫🌸", receiver.local_addr().unwrap().port(), false).unwrap();
+        let mut buf = [0; 64];
+        let count = receiver.recv(&mut buf).unwrap();
+        assert_eq!(
+            &buf[..count],
+            b"/chatbox/input\0\0,sTF\0\0\0\0\xe7\x8c\xab\xf0\x9f\x8c\xb8\0"
+        );
+    }
+
+    #[test]
+    fn enforces_the_chatbox_budget_without_truncation() {
+        assert!(chat_packet(&"😀".repeat(72), true).is_ok());
+        assert!(chat_packet(&"😀".repeat(73), true).is_err());
+        assert!(chat_packet(&"猫\n".repeat(10), true).is_err());
+        assert!(chat_packet("  ", false).is_err());
+    }
+}
