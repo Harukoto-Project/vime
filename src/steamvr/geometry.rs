@@ -1,0 +1,62 @@
+use super::abi::Matrix;
+
+const DISTANCE: f32 = 1.15;
+const DROP: f32 = 0.31;
+
+pub fn anchor(head: &Matrix) -> Matrix {
+    let [[_, _, x, tx], [_, _, _, ty], [_, _, z, tz]] = head.0;
+    let length = x.hypot(z);
+    let (x, z) = if length > 0.01 {
+        (x / length, z / length)
+    } else {
+        (0.0, 1.0)
+    };
+    Matrix([
+        [z, 0.0, x, tx - x * DISTANCE],
+        [0.0, 1.0, 0.0, ty - DROP],
+        [-x, 0.0, z, tz - z * DISTANCE],
+    ])
+}
+
+pub fn hit(panel: &Matrix, aim: &Matrix, width: f32, aspect: f32) -> Option<[f32; 2]> {
+    let column = |matrix: &Matrix, index| matrix.0.map(|row| row[index]);
+    let forward = column(aim, 2).map(|value| -value);
+    let normal = column(panel, 2);
+    let origin = column(aim, 3);
+    let center = column(panel, 3);
+    let projection = dot(forward, normal);
+    if projection > -0.001 {
+        return None;
+    }
+    let delta = std::array::from_fn(|i| center[i] - origin[i]);
+    let distance = dot(delta, normal) / projection;
+    if distance <= 0.0 {
+        return None;
+    }
+    let offset = std::array::from_fn(|i| forward[i] * distance - delta[i]);
+    let u = 0.5 + dot(offset, column(panel, 0)) / width;
+    let v = 0.5 - dot(offset, column(panel, 1)) / (width / aspect);
+    ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some([u, v])
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a.into_iter().zip(b).map(|(a, b)| a * b).sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intersects_the_keyboard_front_and_flips_vertical_coordinates() {
+        let head = Matrix([[1., 0., 0., 0.], [0., 1., 0., 1.6], [0., 0., 1., 0.]]);
+        let panel = anchor(&head);
+        let mut aim = head;
+        aim.0[1][3] -= DROP;
+        assert_eq!(hit(&panel, &aim, 1., 2.), Some([0.5, 0.5]));
+        aim.0[1][3] += 0.125;
+        assert_eq!(hit(&panel, &aim, 1., 2.), Some([0.5, 0.25]));
+        aim.0[0][3] += 1.;
+        assert_eq!(hit(&panel, &aim, 1., 2.), None);
+    }
+}
