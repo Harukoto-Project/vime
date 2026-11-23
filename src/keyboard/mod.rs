@@ -17,6 +17,8 @@ pub enum Action {
     Space,
     Shift,
     ToggleJapaneseWidth,
+    JapaneseDirect(bool),
+    ConvertJapanese,
     ToggleEmoji,
     PageEmoji(i32),
     PageCandidates,
@@ -80,6 +82,8 @@ impl Keyboard {
                 | Action::Backspace
                 | Action::Commit
                 | Action::ToggleJapaneseWidth
+                | Action::JapaneseDirect(_)
+                | Action::ConvertJapanese
                 | Action::Space
                 | Action::Clear
         );
@@ -107,9 +111,13 @@ impl Keyboard {
             Action::Space => self.composer.insert(" "),
             Action::Shift => self.shift = !self.shift,
             Action::ToggleJapaneseWidth => {
-                self.composer.commit();
-                self.japanese_direct = !self.japanese_direct;
-                self.shift = false;
+                self.set_japanese_direct(!self.japanese_direct);
+            }
+            Action::JapaneseDirect(direct) => self.set_japanese_direct(direct),
+            Action::ConvertJapanese => {
+                if let Some(candidate) = self.candidates.first() {
+                    self.composer.select(candidate);
+                }
             }
             Action::ToggleEmoji => self.emoji = !self.emoji,
             Action::PageEmoji(step) => {
@@ -134,6 +142,14 @@ impl Keyboard {
             self.refresh_candidates(&reading);
         }
         self.status("");
+    }
+
+    fn set_japanese_direct(&mut self, direct: bool) {
+        if self.japanese_direct != direct {
+            self.composer.commit();
+            self.japanese_direct = direct;
+            self.shift = false;
+        }
     }
 
     fn refresh_candidates(&mut self, reading: &str) {

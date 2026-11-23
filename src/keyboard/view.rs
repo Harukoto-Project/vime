@@ -192,7 +192,8 @@ impl Board<'_> {
         }
     }
 
-    fn editor(&self, keyboard: &Keyboard, destination: Destination) {
+    fn editor(&mut self, keyboard: &Keyboard, destination: Destination) {
+        let japanese = keyboard.composer.language() == Language::Japanese;
         let rect = self.box_at(22., 63., 816., 69.);
         let painter = self.ui.painter();
         painter.rect(
@@ -223,7 +224,7 @@ impl Board<'_> {
                 },
             );
         }
-        let text_area = self.box_at(36., 70., 787., 38.);
+        let text_area = self.box_at(36., 70., if japanese { 568. } else { 787. }, 38.);
         let text_painter = painter.with_clip_rect(text_area);
         let galley = painter.layout_job(job);
         let x = text_area.left() - (galley.size().x - text_area.width()).max(0.);
@@ -235,7 +236,7 @@ impl Board<'_> {
         if destination == Destination::Osc {
             let count = text.encode_utf16().count() + preedit.encode_utf16().count();
             self.label(
-                self.box_at(744., 107., 79., 18.),
+                self.box_at(if japanese { 525. } else { 744. }, 107., 79., 18.),
                 Align2::RIGHT_CENTER,
                 &format!("{count} / {CHAT_LIMIT}"),
                 12.,
@@ -256,12 +257,30 @@ impl Board<'_> {
             (keyboard.status.as_str(), ACCENT)
         };
         self.label(
-            self.box_at(36., 106., 695., 21.),
+            self.box_at(36., 106., if japanese { 480. } else { 695. }, 21.),
             Align2::LEFT_CENTER,
             detail,
             14.,
             color,
         );
+        if japanese {
+            let text = keyboard.composer.text();
+            let can_clear = !text.is_empty();
+            self.button(
+                self.box_at(620., 77., 91., 39.),
+                "全消去",
+                15.,
+                if can_clear { Face::Key } else { Face::Disabled },
+                Action::Clear,
+            );
+            self.button(
+                self.box_at(720., 77., 104., 39.),
+                "送信 ↗",
+                16.,
+                send_face(&text, destination),
+                Action::Send,
+            );
+        }
     }
 
     fn candidates(&mut self, keyboard: &Keyboard) {
@@ -319,56 +338,23 @@ impl Board<'_> {
         let lang = keyboard.composer.language();
         let text = keyboard.composer.text();
         let has_text = !text.is_empty();
-        let can_send = !text.trim().is_empty()
-            && (destination != Destination::Osc || text.encode_utf16().count() <= CHAT_LIMIT);
-        let japanese = lang == Language::Japanese;
-        let numbers = match (japanese, shift) {
-            (true, false) => "1234567890-^¥",
-            (true, true) => "!\"#$%&'()0=~|",
-            (false, false) => "1234567890-=",
-            (false, true) => "!@#$%^&*()_+",
+        if lang == Language::Japanese {
+            self.jis_keys(keyboard, has_text);
+            return;
+        }
+        let numbers = if shift {
+            "!@#$%^&*()_+"
+        } else {
+            "1234567890-="
         };
-        let width_toggle = japanese.then(|| {
-            (
-                "半角/全角".to_owned(),
-                1.95,
-                Action::ToggleJapaneseWidth,
-                if keyboard.japanese_direct() {
-                    Face::Selected
-                } else {
-                    Face::Key
-                },
-            )
-        });
         self.row(
             188.,
-            width_toggle.into_iter().chain(
-                numbers
-                    .chars()
-                    .map(|key| (key.to_string(), 1., Action::Key(key), Face::Key)),
-            ),
+            numbers
+                .chars()
+                .map(|key| (key.to_string(), 1., Action::Key(key), Face::Key)),
         );
-        let (top, top_shift, home, home_shift, bottom, bottom_shift) = if japanese {
-            (
-                "qwertyuiop@[",
-                "QWERTYUIOP`{",
-                "asdfghjkl;:]",
-                "ASDFGHJKL+*}",
-                "zxcvbnm,./\\",
-                "ZXCVBNM<>?_",
-            )
-        } else {
-            (
-                "qwertyuiop[]",
-                "QWERTYUIOP{}",
-                "asdfghjkl;'",
-                "ASDFGHJKL:\"",
-                "zxcvbnm,./",
-                "ZXCVBNM<>?",
-            )
-        };
-        self.row(232., letters(top, top_shift, shift, lang));
-        let mut middle: Vec<_> = letters(home, home_shift, shift, lang).collect();
+        self.row(232., letters("qwertyuiop[]", "QWERTYUIOP{}", shift, lang));
+        let mut middle: Vec<_> = letters("asdfghjkl;'", "ASDFGHJKL:\"", shift, lang).collect();
         middle.push((
             "削除".to_owned(),
             1.4,
@@ -383,7 +369,7 @@ impl Board<'_> {
             if shift { Face::Selected } else { Face::Key },
         );
         let lower = std::iter::once(shift_key.clone())
-            .chain(letters(bottom, bottom_shift, shift, lang))
+            .chain(letters("zxcvbnm,./", "ZXCVBNM<>?", shift, lang))
             .chain(std::iter::once(shift_key));
         self.row(320., lower);
         self.row(
@@ -414,13 +400,178 @@ impl Board<'_> {
                     "送信 ↗".into(),
                     2.,
                     Action::Send,
-                    if can_send {
-                        Face::Primary
-                    } else {
-                        Face::Disabled
-                    },
+                    send_face(&text, destination),
                 ),
             ],
+        );
+    }
+
+    // The 109-key JIS main block is 15 key units wide. Empty modifier
+    // positions keep their physical pitch, and 1u keys are square.
+    fn jis_rect(&self, row: usize, column: f32, units: f32) -> Rect {
+        const PITCH: f32 = 44.;
+        self.box_at(
+            100. + column * PITCH,
+            188. + row as f32 * PITCH,
+            units * PITCH - 4.,
+            PITCH - 4.,
+        )
+    }
+
+    fn jis_chars(&mut self, row: usize, start: f32, chars: &str) {
+        for (offset, key) in chars.chars().enumerate() {
+            self.button(
+                self.jis_rect(row, start + offset as f32, 1.),
+                &key.to_string(),
+                20.,
+                Face::Key,
+                Action::Key(key),
+            );
+        }
+    }
+
+    fn jis_keys(&mut self, keyboard: &Keyboard, has_text: bool) {
+        let shift = keyboard.shift;
+        let direct = keyboard.japanese_direct();
+        let composing = !keyboard.composer.preedit().is_empty();
+        let shift_face = if shift { Face::Selected } else { Face::Key };
+        let commit_face = if composing { Face::Key } else { Face::Disabled };
+
+        self.button(
+            self.jis_rect(0, 0., 1.),
+            "半/全",
+            12.,
+            if direct { Face::Selected } else { Face::Key },
+            Action::ToggleJapaneseWidth,
+        );
+        self.jis_chars(
+            0,
+            1.,
+            if shift {
+                "!\"#$%&'()0=~|"
+            } else {
+                "1234567890-^¥"
+            },
+        );
+        self.button(
+            self.jis_rect(0, 14., 1.),
+            "BS",
+            14.,
+            if has_text { Face::Key } else { Face::Disabled },
+            Action::Backspace,
+        );
+
+        // Tab occupies the empty 1.5u before Q. The two-row Enter shares the
+        // final 1.5u of this row and the final 1.25u of the row below.
+        self.jis_chars(
+            1,
+            1.5,
+            if shift {
+                "QWERTYUIOP`{"
+            } else {
+                "qwertyuiop@["
+            },
+        );
+        self.button(
+            self.jis_rect(2, 0., 1.75),
+            "英数",
+            15.,
+            if direct { Face::Selected } else { Face::Key },
+            Action::JapaneseDirect(true),
+        );
+        self.jis_chars(
+            2,
+            1.75,
+            if shift {
+                "ASDFGHJKL+*}"
+            } else {
+                "asdfghjkl;:]"
+            },
+        );
+        self.jis_enter(commit_face);
+
+        self.button(
+            self.jis_rect(3, 0., 2.25),
+            "Shift",
+            16.,
+            shift_face,
+            Action::Shift,
+        );
+        self.jis_chars(3, 2.25, if shift { "ZXCVBNM<>?_" } else { "zxcvbnm,./\\" });
+        self.button(
+            self.jis_rect(3, 13.25, 1.75),
+            "Shift",
+            16.,
+            shift_face,
+            Action::Shift,
+        );
+
+        self.button(
+            self.jis_rect(4, 3.75, 1.25),
+            "無変換",
+            13.,
+            commit_face,
+            Action::Commit,
+        );
+        self.button(
+            self.jis_rect(4, 5., 2.5),
+            "スペース",
+            16.,
+            Face::Key,
+            Action::Space,
+        );
+        self.button(
+            self.jis_rect(4, 7.5, 1.25),
+            "変換",
+            14.,
+            if keyboard.candidates.is_empty() {
+                Face::Disabled
+            } else {
+                Face::Key
+            },
+            Action::ConvertJapanese,
+        );
+        self.button(
+            self.jis_rect(4, 8.75, 1.25),
+            "かな",
+            14.,
+            if direct { Face::Key } else { Face::Selected },
+            Action::JapaneseDirect(false),
+        );
+    }
+
+    fn jis_enter(&mut self, face: Face) {
+        let mut top = self.jis_rect(1, 13.5, 1.5);
+        let bottom = self.jis_rect(2, 13.75, 1.25);
+        top.max.y = bottom.min.y;
+        let enabled = !matches!(face, Face::Disabled);
+        let (top_hover, top_press) = self.button_interaction(top, "Enter", enabled, Action::Commit);
+        let (bottom_hover, bottom_press) =
+            self.button_interaction(bottom, "Enter", enabled, Action::Commit);
+        let (fill, border, text) =
+            face.colors(top_hover || bottom_hover, top_press || bottom_press);
+        let painter = self.ui.painter();
+        let mut mesh = Mesh::default();
+        mesh.add_colored_rect(top, fill);
+        mesh.add_colored_rect(bottom, fill);
+        painter.add(Shape::mesh(mesh));
+        painter.add(Shape::closed_line(
+            vec![
+                top.left_top(),
+                top.right_top(),
+                bottom.right_bottom(),
+                bottom.left_bottom(),
+                bottom.left_top(),
+                top.left_bottom(),
+            ],
+            Stroke::new(self.scale, border),
+        ));
+        self.label(
+            bottom.shrink(3. * self.scale),
+            Align2::CENTER_CENTER,
+            "Enter",
+            14.,
+            text,
         );
     }
 
@@ -502,9 +653,14 @@ impl Board<'_> {
         );
     }
 
-    fn button(&mut self, rect: Rect, label: &str, size: f32, face: Face, action: Action) {
-        let enabled = !matches!(face, Face::Disabled);
-        let (hovered, pressed) = if self.controller_input {
+    fn button_interaction(
+        &mut self,
+        rect: Rect,
+        label: &str,
+        enabled: bool,
+        action: Action,
+    ) -> (bool, bool) {
+        if self.controller_input {
             if enabled {
                 self.keys.push((rect, action));
             }
@@ -534,53 +690,13 @@ impl Board<'_> {
                 self.action = Some(action);
             }
             (response.hovered(), response.is_pointer_button_down_on())
-        };
-        let (fill, border, text) = match face {
-            Face::Disabled => (
-                Color32::from_white_alpha(8),
-                Color32::from_white_alpha(19),
-                Color32::from_rgb(137, 151, 167),
-            ),
-            Face::Primary => (
-                if pressed {
-                    Color32::from_rgb(116, 183, 235)
-                } else if hovered {
-                    Color32::from_rgb(187, 226, 255)
-                } else {
-                    ACCENT
-                },
-                Color32::from_white_alpha(150),
-                DARK_INK,
-            ),
-            Face::Selected => (
-                Color32::from_rgba_unmultiplied(111, 181, 237, 67),
-                Color32::from_rgba_unmultiplied(143, 205, 252, 102),
-                INK,
-            ),
-            Face::Subtle | Face::Key => (
-                Color32::from_white_alpha(if pressed {
-                    67
-                } else if hovered {
-                    45
-                } else if matches!(face, Face::Key) {
-                    23
-                } else {
-                    0
-                }),
-                Color32::from_white_alpha(if hovered {
-                    86
-                } else if matches!(face, Face::Key) {
-                    37
-                } else {
-                    0
-                }),
-                if matches!(face, Face::Key) || hovered {
-                    INK
-                } else {
-                    SECONDARY
-                },
-            ),
-        };
+        }
+    }
+
+    fn button(&mut self, rect: Rect, label: &str, size: f32, face: Face, action: Action) {
+        let (hovered, pressed) =
+            self.button_interaction(rect, label, !matches!(face, Face::Disabled), action);
+        let (fill, border, text) = face.colors(hovered, pressed);
         let painted = if pressed {
             rect.shrink(1. * self.scale)
         } else {
@@ -618,6 +734,67 @@ impl Board<'_> {
             FontId::proportional(size * self.scale),
             color,
         );
+    }
+}
+
+impl Face {
+    fn colors(self, hovered: bool, pressed: bool) -> (Color32, Color32, Color32) {
+        match self {
+            Face::Disabled => (
+                Color32::from_white_alpha(8),
+                Color32::from_white_alpha(19),
+                Color32::from_rgb(137, 151, 167),
+            ),
+            Face::Primary => (
+                if pressed {
+                    Color32::from_rgb(116, 183, 235)
+                } else if hovered {
+                    Color32::from_rgb(187, 226, 255)
+                } else {
+                    ACCENT
+                },
+                Color32::from_white_alpha(150),
+                DARK_INK,
+            ),
+            Face::Selected => (
+                Color32::from_rgba_unmultiplied(111, 181, 237, 67),
+                Color32::from_rgba_unmultiplied(143, 205, 252, 102),
+                INK,
+            ),
+            Face::Subtle | Face::Key => (
+                Color32::from_white_alpha(if pressed {
+                    67
+                } else if hovered {
+                    45
+                } else if matches!(self, Face::Key) {
+                    23
+                } else {
+                    0
+                }),
+                Color32::from_white_alpha(if hovered {
+                    86
+                } else if matches!(self, Face::Key) {
+                    37
+                } else {
+                    0
+                }),
+                if matches!(self, Face::Key) || hovered {
+                    INK
+                } else {
+                    SECONDARY
+                },
+            ),
+        }
+    }
+}
+
+fn send_face(text: &str, destination: Destination) -> Face {
+    if !text.trim().is_empty()
+        && (destination != Destination::Osc || text.encode_utf16().count() <= CHAT_LIMIT)
+    {
+        Face::Primary
+    } else {
+        Face::Disabled
     }
 }
 
