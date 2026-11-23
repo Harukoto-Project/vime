@@ -43,6 +43,8 @@ jobs:
         run: cargo test --locked
 
       - name: Build
+        env:
+          VIME_TYPO_REPORT_URL: ${{ vars.VIME_TYPO_REPORT_URL }}
         run: cargo build --release --locked
 
       - name: Package

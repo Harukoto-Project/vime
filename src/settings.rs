@@ -36,11 +36,23 @@ mod tests {
     }
 
     #[test]
+    fn typo_reporting_defaults_to_on_and_preserves_opt_out() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("settings.json"), "{}").unwrap();
+        assert!(Settings::default().report_typos);
+        let mut settings = Settings::load(directory.path()).unwrap();
+        assert!(settings.report_typos);
+        settings.report_typos = false;
+        settings.save(directory.path()).unwrap();
+        assert!(!Settings::load(directory.path()).unwrap().report_typos);
+    }
+
+    #[test]
     fn is_set_up_once_settings_are_saved_and_proposes_local_cuda_d1() {
         let directory = tempfile::tempdir().unwrap();
         assert!(!Settings::saved(directory.path()));
         let mut settings = Settings::default();
-        // Nothing is switched on by default; the welcome page proposes it.
+        // The typo checker stays off until the welcome page chooses a provider.
         assert_eq!(settings.typo.provider, TypoProvider::Off);
         settings.typo = TypoSettings::recommended();
         assert_eq!(settings.typo.provider, TypoProvider::D1Local);
@@ -294,6 +306,7 @@ pub struct Settings {
     pub overlay_width: f32,
     pub language: Lang,
     pub typo: TypoSettings,
+    pub report_typos: bool,
 }
 
 impl Default for Settings {
@@ -306,6 +319,7 @@ impl Default for Settings {
             hotkey: "Ctrl+Shift+F8".into(),
             overlay_width: 1.08,
             typo: TypoSettings::default(),
+            report_typos: true,
         }
     }
 }

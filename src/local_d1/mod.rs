@@ -40,7 +40,7 @@ pub use download::{Download, MODEL_LICENSE, installed, model_available, required
 pub(crate) use download::{Progress, fetch};
 
 // The quantized model's probabilities are calibrated independently of the API.
-pub const MIN_LEARN_PROBABILITY: f64 = 0.72;
+pub const MIN_EDIT_PROBABILITY: f64 = 0.72;
 pub const MIN_SUGGESTION_PROBABILITY: f64 = 0.67;
 
 const MODEL_NAME: &str = "d1-2B-Q4_K_M.gguf";
@@ -582,7 +582,7 @@ mod tests {
             response["answers"]["typo"]["probabilities"]["accept"]
                 .as_f64()
                 .unwrap()
-                >= MIN_LEARN_PROBABILITY,
+                >= MIN_EDIT_PROBABILITY,
             "{response}"
         );
         let state = serde_json::json!({"language": "日本語", "original": "こんいちは", "context": "[…]、元気ですか？"});

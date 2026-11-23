@@ -17,7 +17,7 @@ use vime::{
 
 pub use sound::play_click;
 pub use typo::CalibrationJob;
-pub(crate) use typo::{Pair as LearnedTypo, load_learned_typos};
+pub(crate) use typo::typo_reporting_available;
 pub use view::{ASPECT, SIZE, VrKeys, show, show_vr};
 
 #[derive(Clone, Debug)]
@@ -157,12 +157,17 @@ impl Keyboard {
         }
     }
 
-    pub fn configure_typo(&mut self, settings: &TypoSettings, directory: &Path) {
+    pub fn configure_typo(
+        &mut self,
+        settings: &TypoSettings,
+        report_typos: bool,
+        directory: &Path,
+    ) {
         if settings.provider != TypoProvider::Off && self.typo.is_none() {
             self.typo = Some(Typo::start(directory.to_owned(), self.context.clone()));
         }
         if let Some(typo) = &mut self.typo {
-            typo.configure(settings);
+            typo.configure(settings, report_typos);
         }
     }
 
@@ -172,26 +177,6 @@ impl Keyboard {
             .suggestion
             .as_ref()
             .map(|suggestion| suggestion.word.as_str())
-    }
-
-    pub(crate) fn learned_typos_revision(&self) -> u64 {
-        self.typo.as_ref().map_or(0, |typo| typo.saved_revision)
-    }
-
-    /// Deletes learned typos. Without a running typo worker the saved list is
-    /// edited directly.
-    pub(crate) fn forget_typos(
-        &mut self,
-        pairs: Vec<LearnedTypo>,
-        directory: &Path,
-    ) -> std::io::Result<()> {
-        match &mut self.typo {
-            Some(typo) => {
-                typo.forget(pairs);
-                Ok(())
-            }
-            None => typo::forget_learned_typos(directory, &pairs),
-        }
     }
 
     /// Picks up a misconversion table that was just downloaded or removed.

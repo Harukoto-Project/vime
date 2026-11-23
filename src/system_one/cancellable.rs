@@ -46,6 +46,29 @@ impl CancellableClient {
         deadline: Instant,
         cancelled: impl Fn() -> bool,
     ) -> io::Result<Value> {
+        self.post_inner(url, key, body, deadline, cancelled, true)
+    }
+
+    pub fn post_without_response(
+        &self,
+        url: &str,
+        body: &Value,
+        deadline: Instant,
+        cancelled: impl Fn() -> bool,
+    ) -> io::Result<()> {
+        self.post_inner(url, "", body, deadline, cancelled, false)
+            .map(|_| ())
+    }
+
+    fn post_inner(
+        &self,
+        url: &str,
+        key: &str,
+        body: &Value,
+        deadline: Instant,
+        cancelled: impl Fn() -> bool,
+        read_response: bool,
+    ) -> io::Result<Value> {
         valid_time(deadline, &cancelled)?;
         let endpoint = Endpoint::parse(url).ok_or(io::ErrorKind::InvalidInput)?;
         if key.chars().any(char::is_control) {
@@ -95,6 +118,7 @@ impl CancellableClient {
             }
             let buffers = &*state;
             let length = buffers.body.len() as u32;
+            valid_time(deadline, &cancelled)?;
             started(WinHttpSendRequest(
                 handle,
                 buffers.headers.as_ptr(),
@@ -119,6 +143,9 @@ impl CancellableClient {
             )?;
         }
         request.require_success()?;
+        if !read_response {
+            return Ok(Value::Null);
+        }
         let mut response = Vec::new();
         loop {
             valid_time(deadline, &cancelled)?;
@@ -239,11 +266,64 @@ fn wait(
 mod tests {
     use super::*;
     use std::{
-        io::Read,
+        io::{BufRead, BufReader, Read, Write},
         net::TcpListener,
         sync::atomic::{AtomicBool, Ordering::Relaxed},
         thread,
     };
+
+    #[test]
+    fn posts_a_utf8_report_and_accepts_an_empty_success_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/v1/typos", listener.local_addr().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let payload = serde_json::json!({"original":"異義","replacement":"異議"});
+        let client = CancellableClient::new(true).unwrap();
+        thread::scope(|scope| {
+            let request =
+                scope.spawn(|| client.post_without_response(&url, &payload, deadline, || false));
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(5))
+                    }
+                    Err(error) => panic!("mock server did not get a report: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(&mut stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(line.trim_end(), "POST /v1/typos HTTP/1.1");
+            let mut length = None;
+            loop {
+                line.clear();
+                assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                let header = line.to_ascii_lowercase();
+                if let Some(value) = header.strip_prefix("content-length:") {
+                    length = Some(value.trim().parse().unwrap());
+                }
+                assert!(!header.starts_with("authorization:"));
+            }
+            let mut body = vec![0; length.unwrap()];
+            reader.read_exact(&mut body).unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), payload);
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            request.join().unwrap().unwrap();
+        });
+    }
 
     #[test]
     fn cancellation_closes_a_request_waiting_for_response_headers() {

@@ -129,23 +129,9 @@ API キーを入力	Enter API key	API 키 입력
 保存済み（変更する場合は入力）	Saved (enter to replace)	저장됨(변경 시 입력)
 保存済みのキーを削除	Remove saved key	저장된 키 삭제
 API キーを保護できませんでした ({0})	Could not protect the API key ({0})	API 키를 보호할 수 없습니다 ({0})
-学習済みの誤字	Learned typos	학습된 오타
-学習済みの誤字を読み込めませんでした ({0})	Could not load learned typos ({0})	학습된 오타를 불러올 수 없습니다 ({0})
-学習済みの誤字はまだありません	No typos learned yet.	아직 학습된 오타가 없습니다.
-誤字・修正後の語を検索	Search typos or corrections	오타 또는 수정된 단어 검색
-すべての言語	All languages	모든 언어
-条件に一致する誤字はありません	No matching typos.	조건과 일치하는 오타가 없습니다.
-表示 {0} 件	{0} shown	{0}개 표시
-誤字	Typo	오타
-修正後	Correction	수정된 단어
 GPU（CUDA）	GPU (CUDA)	GPU(CUDA)
 CUDA 推論を開始できません。対応する NVIDIA GPU、ドライバー、空き VRAM を確認してください	Could not start CUDA inference. Check the NVIDIA GPU, driver, and available VRAM.	CUDA 추론을 시작할 수 없습니다. 지원되는 NVIDIA GPU, 드라이버, 사용 가능한 VRAM을 확인하세요.
 推論エンジンをダウンロード（約 {0} MB）	Download inference engine (about {0} MB)	추론 엔진 다운로드(약 {0} MB)
-削除	Delete	삭제
-表示中の{0}件を削除	Delete the {0} shown	표시 중인 {0}개 삭제
-{0}件を削除する	Delete {0} entries	{0}개 삭제
-キャンセル	Cancel	취소
-学習済みの誤字を削除できませんでした ({0})	Could not delete learned typos ({0})	학습된 오타를 삭제할 수 없습니다 ({0})
 日本語の誤変換データ（任意）	Japanese misconversion data (optional)	일본어 오변환 데이터(선택)
 データを集計しています	Counting the data	데이터를 집계하는 중
 誤変換データを取得済み	Misconversion data downloaded	오변환 데이터를 받음
@@ -165,3 +151,6 @@ ViME へようこそ	Welcome to ViME	ViME에 오신 것을 환영합니다
 d1-2B（ローカル・CUDA）と日本語の誤変換データを取得して始めます（約 {0} GB）	Gets d1-2B (local, CUDA) and the Japanese misconversion data, then starts (about {0} GB)	d1-2B(로컬·CUDA)와 일본어 오변환 데이터를 받아 시작합니다(약 {0} GB)
 または、自分で選ぶ	Or choose yourself	또는 직접 선택
 この内容で始める	Start with these choices	이 내용으로 시작
+誤字・誤変換の報告を許可する	Allow typo and misconversion reports	오타 및 오변환 보고 허용
+打ち直しが誤字や誤変換の修正と判定されると、修正前後の語、入力言語、アプリのバージョンが ViME の運営者に自動送信され、変換精度の分析と改善に使われます。送信する語に個人情報や機密情報が含まれる可能性があります。設定でいつでもオフにできます。	When a retyped word is identified as a typo or misconversion correction, the original and corrected words, input language, and app version are sent automatically to the ViME maintainers to analyze and improve conversion accuracy. These words may contain personal or confidential information. You can turn reporting off at any time in Settings.	다시 입력한 단어가 오타나 오변환의 수정으로 판정되면 수정 전후 단어, 입력 언어, 앱 버전이 ViME 운영자에게 자동으로 전송되어 변환 정확도를 분석하고 개선하는 데 사용됩니다. 전송되는 단어에 개인정보나 기밀 정보가 포함될 수 있습니다. 설정에서 언제든지 끌 수 있습니다.
+このビルドには報告先が設定されていません	This build has no reporting endpoint configured.	이 빌드에는 보고 대상이 설정되어 있지 않습니다.

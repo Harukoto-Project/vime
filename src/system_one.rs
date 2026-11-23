@@ -82,6 +82,10 @@ pub fn valid_url(url: &str) -> bool {
     Endpoint::parse(url).is_some()
 }
 
+pub fn valid_https_url(url: &str) -> bool {
+    Endpoint::parse(url).is_some_and(|endpoint| endpoint.secure)
+}
+
 struct Handle(*mut c_void);
 
 impl Handle {

@@ -1,5 +1,3 @@
-mod learned_typos;
-
 use crate::{
     dashboard::{self, Command, Dashboard},
     hotkeys::Hotkeys,
@@ -11,7 +9,6 @@ use eframe::egui::{
     self, Align, Button, Color32, FontData, FontDefinitions, FontFamily, Frame, Layout, Margin,
     RichText, ScrollArea, Stroke, Ui, ViewportBuilder,
 };
-use learned_typos::LearnedTypos;
 use std::{
     collections::HashMap,
     env, fs,
@@ -52,7 +49,6 @@ enum Page {
     #[default]
     Keyboard,
     Settings,
-    LearnedTypos,
 }
 
 pub fn run() -> eframe::Result {
@@ -89,7 +85,6 @@ struct App {
     page: Page,
     /// Shown until the first settings are saved.
     welcome: bool,
-    learned_typos: LearnedTypos,
     dashboard: Dashboard,
     world_keys: Option<VrKeys>,
     pending_world_keys: Option<VrKeys>,
@@ -184,7 +179,7 @@ impl App {
             }
         };
         let mut keyboard = Keyboard::new(creation.egui_ctx.clone());
-        keyboard.configure_typo(&settings.typo, &directory);
+        keyboard.configure_typo(&settings.typo, settings.report_typos, &directory);
         Ok(Self {
             directory,
             draft,
@@ -196,7 +191,6 @@ impl App {
             auto_connect: true,
             page: Page::default(),
             welcome,
-            learned_typos: LearnedTypos::default(),
             dashboard: Dashboard::default(),
             world_keys: None,
             pending_world_keys: None,
@@ -272,8 +266,11 @@ impl App {
         self.api_key_before_url = None;
         self.settings = self.draft.clone();
         self.calibration_check = Instant::now();
-        self.keyboard
-            .configure_typo(&self.settings.typo, &self.directory);
+        self.keyboard.configure_typo(
+            &self.settings.typo,
+            self.settings.report_typos,
+            &self.directory,
+        );
         if let Some(vr) = &mut self.vr
             && let Err(error) = vr.set_width(self.settings.overlay_width)
         {
@@ -566,29 +563,11 @@ impl App {
         ui.add_space(17.);
         self.steamvr_panel(ui);
         ui.add_space(14.);
-        let previous = self.page;
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.page, Page::Keyboard, tr("キーボード"));
             ui.selectable_value(&mut self.page, Page::Settings, tr("設定"));
-            ui.selectable_value(&mut self.page, Page::LearnedTypos, tr("学習済みの誤字"));
         });
         ui.add_space(14.);
-        if self.page == Page::LearnedTypos {
-            if previous != self.page {
-                self.learned_typos.refresh_on_open();
-            }
-            let removed = self.learned_typos.show(
-                ui,
-                &self.directory,
-                self.keyboard.learned_typos_revision(),
-            );
-            if !removed.is_empty()
-                && let Err(error) = self.keyboard.forget_typos(removed, &self.directory)
-            {
-                self.learned_typos.delete_failed(error);
-            }
-            return;
-        }
         if self.page == Page::Settings {
             let before = self.draft.clone();
             self.settings_panel(ui);
@@ -659,6 +638,8 @@ impl App {
             ui.label(tr(
                 "はじめに誤字修正を設定します。あとから設定画面でいつでも変えられます。",
             ));
+            ui.add_space(10.);
+            self.typo_report_settings(ui);
             ui.add_space(10.);
             let recommended = TypoSettings::recommended();
             let bytes = local_d1::required_bytes(&self.directory, recommended.d1_device)
@@ -828,6 +809,8 @@ impl App {
             ui.add_space(10.);
             self.typo_settings(ui);
             ui.add_space(10.);
+            self.typo_report_settings(ui);
+            ui.add_space(10.);
             if !self.settings_message.is_empty() {
                 ui.label(RichText::new(&self.settings_message).small().color(
                     if self.settings_error {
@@ -880,6 +863,24 @@ impl App {
             ui.label(tr("キーボード幅"));
             ui.add(egui::Slider::new(&mut self.draft.overlay_width, 0.65..=1.65).suffix(" m"));
         });
+    }
+
+    fn typo_report_settings(&mut self, ui: &mut Ui) {
+        ui.checkbox(
+            &mut self.draft.report_typos,
+            tr("誤字・誤変換の報告を許可する"),
+        );
+        let notice = tr(
+            "打ち直しが誤字や誤変換の修正と判定されると、修正前後の語、入力言語、アプリのバージョンが ViME の運営者に自動送信され、変換精度の分析と改善に使われます。送信する語に個人情報や機密情報が含まれる可能性があります。設定でいつでもオフにできます。",
+        );
+        ui.label(RichText::new(notice).small().color(SECONDARY));
+        if !crate::keyboard::typo_reporting_available() {
+            ui.label(
+                RichText::new(tr("このビルドには報告先が設定されていません"))
+                    .small()
+                    .color(SECONDARY),
+            );
+        }
     }
 
     fn typo_settings(&mut self, ui: &mut Ui) {
@@ -1316,8 +1317,11 @@ impl App {
                     .entry(key.clone())
                     .or_default()
                     .measurement = Some(measurement);
-                self.keyboard
-                    .configure_typo(&self.settings.typo, &self.directory);
+                self.keyboard.configure_typo(
+                    &self.settings.typo,
+                    self.settings.report_typos,
+                    &self.directory,
+                );
                 Ok(())
             });
             if let Err(error) = result {
