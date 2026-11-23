@@ -152,7 +152,7 @@ impl OverlaySurface {
                 ])
             })
             .flatten()
-            .map(|shape| ClippedShape { clip_rect, shape })
+            .map(|shape| ClippedShape::new(clip_rect, shape))
             .collect();
 
         // Restore the keyboard from its GPU texture before adding the current pointers.
