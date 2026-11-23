@@ -5,6 +5,8 @@ mod dashboard;
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod desktop;
 #[cfg(all(windows, target_arch = "x86_64"))]
+mod diagnostics;
+#[cfg(all(windows, target_arch = "x86_64"))]
 mod hotkeys;
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod keyboard;

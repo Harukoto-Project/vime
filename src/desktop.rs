@@ -1,5 +1,6 @@
 use crate::{
     dashboard::{self, Command, Dashboard, Page},
+    diagnostics::{Diagnostics, OverlayState},
     hotkeys::Hotkeys,
     keyboard::{self, Action, Keyboard, VrKeys},
     overlay_surface::OverlaySurface,
@@ -50,6 +51,7 @@ pub fn run() -> eframe::Result {
 
 struct App {
     directory: PathBuf,
+    diagnostics: Diagnostics,
     settings: Settings,
     draft: Settings,
     hotkeys: Option<Hotkeys>,
@@ -127,6 +129,7 @@ impl App {
             }
         };
         Ok(Self {
+            diagnostics: Diagnostics::new(&directory),
             directory,
             draft: settings.clone(),
             settings,
@@ -295,9 +298,14 @@ impl App {
             let keyboard_changed = self.last_world != Some(frame);
             if keyboard_changed {
                 self.last_world = Some(frame);
+                let started = Instant::now();
                 self.pending_world_keys = Some(surfaces.keyboard.render(Vec::new(), |ui| {
                     keyboard::show_vr(ui, &self.keyboard, self.settings.destination, caret_visible)
                 }));
+                self.diagnostics
+                    .counters
+                    .world_render
+                    .observe(started.elapsed());
             }
             if keyboard_changed
                 || pointer_changed(&surfaces.keyboard, now, self.last_pointers, self.pointers)
@@ -310,13 +318,27 @@ impl App {
                     let pointer = pointer?;
                     Some((keys?.position(pointer.uv), pointer.down))
                 });
+                let started = Instant::now();
                 surfaces.keyboard.compose_pointers(pointers);
+                self.diagnostics
+                    .counters
+                    .world_cursor
+                    .observe(started.elapsed());
                 self.last_pointers = self.pointers;
             }
-            if let Some(result) = surfaces
-                .keyboard
-                .present(|texture| vr.present(Surface::Keyboard, texture))
-            {
+            let started = Instant::now();
+            let counters = &mut self.diagnostics.counters;
+            if let Some(result) = surfaces.keyboard.present(|texture| {
+                let submitted = Instant::now();
+                let result = vr.present(Surface::Keyboard, texture);
+                counters.world_openvr.observe(submitted.elapsed());
+                result
+            }) {
+                counters.world_submit.observe(started.elapsed());
+                if let Err(error) = &result {
+                    counters.world_submit_errors += 1;
+                    counters.last_world_submit_error = Some(error.clone());
+                }
                 if result.is_ok()
                     && let Some(keys) = self.pending_world_keys.take()
                 {
@@ -335,6 +357,7 @@ impl App {
             self.dashboard.redraw = false;
             self.dashboard_revision = revision;
             let events = self.dashboard.take_events();
+            let started = Instant::now();
             command = surfaces.dashboard.render(events, |ui| {
                 self.dashboard.show(
                     ui,
@@ -345,11 +368,24 @@ impl App {
                     caret_visible,
                 )
             });
+            self.diagnostics
+                .counters
+                .dashboard_render
+                .observe(started.elapsed());
         }
-        if let Some(result) = surfaces
-            .dashboard
-            .present(|texture| vr.present(Surface::Dashboard, texture))
-        {
+        let started = Instant::now();
+        let counters = &mut self.diagnostics.counters;
+        if let Some(result) = surfaces.dashboard.present(|texture| {
+            let submitted = Instant::now();
+            let result = vr.present(Surface::Dashboard, texture);
+            counters.dashboard_openvr.observe(submitted.elapsed());
+            result
+        }) {
+            counters.dashboard_submit.observe(started.elapsed());
+            if let Err(error) = &result {
+                counters.dashboard_submit_errors += 1;
+                counters.last_dashboard_submit_error = Some(error.clone());
+            }
             self.draw_errors[1] = result.err();
         }
 
@@ -551,6 +587,9 @@ impl App {
 
 impl eframe::App for App {
     fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        let started = Instant::now();
+        self.diagnostics.start_logic(started);
+        let mut dashboard_visible = false;
         self.keyboard.poll_candidates();
         if std::mem::take(&mut self.auto_connect) {
             self.connect();
@@ -559,7 +598,18 @@ impl eframe::App for App {
             self.toggle();
         }
         if let Some(vr) = &mut self.vr {
+            let poll_started = Instant::now();
             let frame = vr.poll(keyboard::ASPECT);
+            dashboard_visible = frame.dashboard_visible;
+            let counters = &mut self.diagnostics.counters;
+            counters.vr_poll.observe(poll_started.elapsed());
+            counters.pointer_observations += frame.pointers.iter().flatten().count() as u64;
+            counters.presses += frame.keyboard_presses.iter().flatten().count() as u64;
+            counters.dashboard_events += frame.dashboard_events.len() as u64;
+            if let Some(error) = frame.input_error {
+                counters.input_errors += 1;
+                counters.last_input_error = Some(error);
+            }
             if frame.quit {
                 self.disconnect();
                 self.steamvr_message = "SteamVR との接続が終了しました".into();
@@ -607,6 +657,7 @@ impl eframe::App for App {
                             != Some((self.keyboard.revision, caret_visible))));
             if (keyboard_changed || dashboard_changed) && !self.paint_requested {
                 self.paint_requested = true;
+                self.diagnostics.counters.paint_requests += 1;
                 context.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
             }
             // Poll VR independently of the desktop monitor's refresh rate.
@@ -616,12 +667,26 @@ impl eframe::App for App {
                 33_333
             }));
         }
+        self.diagnostics.state(OverlayState {
+            connected: self.vr.is_some(),
+            world_visible: self.vr.as_ref().is_some_and(SteamVr::visible),
+            dashboard_visible,
+            dashboard_active: self.dashboard.active,
+            desktop_minimized,
+        });
+        self.diagnostics.counters.logic.observe(started.elapsed());
+        self.diagnostics.sample(Instant::now(), || {
+            self.vr.as_ref().map_or(0, SteamVr::scene_pid)
+        });
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        let started = Instant::now();
+        self.diagnostics.start_ui(started);
         self.paint_requested = false;
         self.paint_overlay();
         if ui.input(|input| input.viewport().minimized == Some(true)) {
+            self.diagnostics.counters.ui.observe(started.elapsed());
             return;
         }
         // The root ui is rebuilt by eframe, including after a hidden-window VR frame.
@@ -633,6 +698,7 @@ impl eframe::App for App {
                     .auto_shrink([false; 2])
                     .show(ui, |ui| self.page(ui));
             });
+        self.diagnostics.counters.ui.observe(started.elapsed());
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {

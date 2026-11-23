@@ -28,7 +28,9 @@ pub struct Frame {
     pub toggle: bool,
     pub keyboard_presses: [Option<[f32; 2]>; 2],
     pub pointers: [Option<Pointer>; 2],
+    pub dashboard_visible: bool,
     pub dashboard_active: bool,
+    pub input_error: Option<i32>,
     pub dashboard_events: Vec<DashboardEvent>,
     pub quit: bool,
 }
@@ -400,6 +402,7 @@ impl SteamVr {
         }
         let pointing = self.world_shown && !dashboard;
         let mut frame = Frame {
+            dashboard_visible: dashboard,
             dashboard_active,
             dashboard_events,
             ..Frame::default()
@@ -409,12 +412,13 @@ impl SteamVr {
         sets[0].priority = 1;
         sets[1].set = self.pointer_set;
         sets[1].priority = 20;
-        if self.input.update(
+        let input_error = self.input.update(
             sets.as_ptr(),
             size_of::<ActionSet>() as u32,
             if pointing { 2 } else { 1 },
-        ) != 0
-        {
+        );
+        if input_error != 0 {
+            frame.input_error = Some(input_error);
             self.clear_pointers();
             return frame;
         }
