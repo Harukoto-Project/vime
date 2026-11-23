@@ -9,6 +9,20 @@ $lock = $null
 $cleanup = $false
 $failure = $null
 
+function Get-UpdateFiles([IO.DirectoryInfo]$directory, [string]$prefix) {
+    foreach ($entry in $directory.EnumerateFileSystemInfos()) {
+        $relative = [IO.Path]::Combine($prefix, $entry.Name)
+        if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "Unexpected link in the update: $relative"
+        }
+        if ($entry -is [IO.DirectoryInfo]) {
+            Get-UpdateFiles $entry $relative
+        } else {
+            @{ Source = $entry.FullName; Relative = $relative }
+        }
+    }
+}
+
 try {
     if ([IO.Path]::GetDirectoryName($stage) -ne $install -or
         -not [IO.Path]::GetFileName($stage).StartsWith('.vime-update-')) {
@@ -32,15 +46,15 @@ try {
         $sha256.Dispose()
     }
     if ($hash -eq $env:VIME_UPDATE_ORIGINAL_HASH) {
-        $files = @(Get-ChildItem -LiteralPath $package -Recurse -File -Force |
-            Where-Object { $_.FullName -ne (Join-Path $package 'vime.exe') })
+        $files = @(Get-UpdateFiles ([IO.DirectoryInfo]::new($package)) '')
+        $payloadExe = @($files | Where-Object { $_.Relative -eq 'vime.exe' })
+        if ($payloadExe.Count -ne 1) {
+            throw 'Missing update executable.'
+        }
         # Update the executable last so it marks a completed installation.
-        $files += Get-Item -LiteralPath (Join-Path $package 'vime.exe')
+        $files = @($files | Where-Object { $_.Relative -ne 'vime.exe' }) + $payloadExe
         foreach ($file in $files) {
-            $relative = $file.FullName.Substring($package.Length + 1)
-            if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-                throw "Unexpected link in the update: $relative"
-            }
+            $relative = $file.Relative
             $target = if ($relative -eq 'vime.exe') { $exe } else { Join-Path $install $relative }
             if ([IO.File]::Exists($target) -and
                 ([IO.File]::GetAttributes($target) -band [IO.FileAttributes]::ReparsePoint)) {
@@ -60,9 +74,9 @@ try {
             $changes.Add($change)
             if ([IO.File]::Exists($target)) {
                 [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($saved)) | Out-Null
-                [IO.File]::Replace($file.FullName, $target, $saved)
+                [IO.File]::Replace($file.Source, $target, $saved)
             } else {
-                [IO.File]::Move($file.FullName, $target)
+                [IO.File]::Move($file.Source, $target)
                 $change.Added = $true
             }
         }
