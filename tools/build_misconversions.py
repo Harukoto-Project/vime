@@ -16,12 +16,14 @@ Only the kanji misconversions (`kanji-conversion_a` and `_b`) of train.jsonl
 are used, and no sentences are kept. Output lines are
 `word<TAB>corrected<TAB>kept<TAB>fix fix fix`: how often editors replaced the
 word, how often it stays in the corrected sentences, and the most frequent
-replacements. `--evaluate` measures the table on test.jsonl, which is not used
-to build it. The output derives from a CC BY-SA 3.0 dataset, so do not commit
+replacements. `--evaluate` measures the table on test.jsonl and on the manually
+checked gold.jsonl (the set used in Asahi Shimbun's LLM typo benchmark); neither is
+used to build it. The output derives from a CC BY-SA 3.0 dataset, so do not commit
 it or share it under another license.
 """
 
 import collections
+import difflib
 import json
 import pathlib
 import re
@@ -149,6 +151,63 @@ def evaluate(table, source: pathlib.Path) -> None:
         )
 
 
+def kanji_replacements(pre: str, post: str):
+    """Spans where `pre` has other kanji text than `post` and nothing else differs."""
+    matcher = difflib.SequenceMatcher(None, pre, post, autojunk=False)
+    changes = [op for op in matcher.get_opcodes() if op[0] != "equal"]
+    if len(changes) != 1 or changes[0][0] != "replace":
+        return None
+    _, start, end, post_start, post_end = changes[0]
+    if KANJI.search(pre[start:end]) and KANJI.search(post[post_start:post_end]):
+        return start, end
+    return None
+
+
+def evaluate_gold(table, source: pathlib.Path) -> None:
+    """The manually checked `gold` set (as in Asahi Shimbun's benchmark).
+
+    It has no error labels, so a sentence counts as a kanji misconversion when
+    exactly one kanji span was replaced. A fix is offered when a table word that
+    overlaps the span lists a replacement that gives the corrected sentence.
+    """
+    gold = list(records(source / "gold.jsonl"))
+    cases = [
+        (record, span)
+        for record in gold
+        if (span := kanji_replacements(record["pre_text"], record["post_text"]))
+    ]
+    print(f"gold sentences: {len(gold)}; single kanji replacements: {len(cases)}")
+    for threshold in (0.1, 0.2, 0.3, 0.5):
+        words = {
+            word: fixes
+            for word, (wrong, kept, fixes) in table.items()
+            if wrong / (wrong + kept) >= threshold
+        }
+        lengths = sorted({len(word) for word in words})
+
+        def hits(text):
+            for length in lengths:
+                for start in range(len(text) - length + 1):
+                    word = text[start : start + length]
+                    if word in words:
+                        yield start, start + length, words[word]
+
+        reached = fixed = 0
+        for record, (start, end) in cases:
+            pre, post = record["pre_text"], record["post_text"]
+            found = [h for h in hits(pre) if h[0] < end and h[1] > start]
+            reached += bool(found)
+            fixed += any(
+                pre[: s] + fix + pre[e:] == post for s, e, fixes in found for fix in fixes
+            )
+        asked = sum(1 for record in gold if next(hits(record["post_text"]), None))
+        print(
+            f"  ratio >= {threshold:.2f}: word found {reached / len(cases):.1%}, "
+            f"right sentence offered {fixed / len(cases):.1%}, "
+            f"corrected sentences asked about {asked / len(gold):.1%}"
+        )
+
+
 def main(source: pathlib.Path, check: bool, output: pathlib.Path | None) -> None:
     table = build(source)
     print(f"{len(table)} words")
@@ -157,6 +216,7 @@ def main(source: pathlib.Path, check: bool, output: pathlib.Path | None) -> None
         print(f"written to {output} ({output.stat().st_size / 1e6:.2f} MB)")
     if check:
         evaluate(table, source)
+        evaluate_gold(table, source)
 
 
 if __name__ == "__main__":
