@@ -1,6 +1,5 @@
 mod abi;
 mod actions;
-mod cursor;
 mod geometry;
 
 use abi::{
@@ -19,7 +18,7 @@ type Result<T> = std::result::Result<T, String>;
 static RUNTIME_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Copy, Default, PartialEq)]
-struct Pointer {
+pub struct Pointer {
     pub uv: [f32; 2],
     pub down: bool,
 }
@@ -28,6 +27,7 @@ struct Pointer {
 pub struct Frame {
     pub toggle: bool,
     pub keyboard_presses: [Option<[f32; 2]>; 2],
+    pub pointers: [Option<Pointer>; 2],
     pub dashboard_active: bool,
     pub dashboard_events: Vec<DashboardEvent>,
     pub quit: bool,
@@ -110,7 +110,6 @@ pub struct SteamVr {
     applications: Applications,
     handle: u64,
     dashboard: u64,
-    cursors: [cursor::Cursor; 2],
     pointer_filters: [geometry::PointerFilter; 2],
     toggle_set: u64,
     pointer_set: u64,
@@ -201,7 +200,6 @@ impl SteamVr {
             applications,
             handle,
             dashboard: 0,
-            cursors: Default::default(),
             pointer_filters: Default::default(),
             toggle_set,
             pointer_set,
@@ -217,16 +215,6 @@ impl SteamVr {
         };
         session.configure_texture(handle)?;
         session.create_dashboard(dashboard_size)?;
-        session.cursors[0].initialize(
-            &session.overlay,
-            c"org.harukoto.vime.cursor.left",
-            [215, 194, 255, 255],
-        )?;
-        session.cursors[1].initialize(
-            &session.overlay,
-            c"org.harukoto.vime.cursor.right",
-            [159, 211, 255, 255],
-        )?;
         Ok(session)
     }
 
@@ -439,7 +427,7 @@ impl SteamVr {
             let now = Instant::now();
             for hand in 0..2 {
                 let (pointer, press) = self.pointer(hand, &panel, aspect, now);
-                self.cursors[hand].update(&self.overlay, self.handle, pointer, self.width, aspect);
+                frame.pointers[hand] = pointer;
                 frame.keyboard_presses[hand] = press;
             }
         } else {
@@ -485,9 +473,8 @@ impl SteamVr {
 
     fn clear_pointers(&mut self) {
         self.armed = [false; 2];
-        for (cursor, filter) in self.cursors.iter_mut().zip(&mut self.pointer_filters) {
+        for filter in &mut self.pointer_filters {
             filter.reset();
-            cursor.update(&self.overlay, self.handle, None, self.width, 1.);
         }
     }
 
@@ -503,11 +490,6 @@ impl SteamVr {
 impl Drop for SteamVr {
     fn drop(&mut self) {
         if !self.quitting {
-            for cursor in &self.cursors {
-                if cursor.handle != 0 {
-                    self.overlay.destroy(cursor.handle);
-                }
-            }
             if self.dashboard != 0 {
                 self.overlay.destroy(self.dashboard);
             }

@@ -30,14 +30,6 @@ impl PointerFilter {
     }
 }
 
-pub fn cursor_transform(uv: [f32; 2], width: f32, aspect: f32) -> Matrix {
-    Matrix([
-        [1., 0., 0., (uv[0] - 0.5) * width],
-        [0., 1., 0., (0.5 - uv[1]) * width / aspect],
-        [0., 0., 1., 0.002],
-    ])
-}
-
 pub fn anchor(head: &Matrix) -> Matrix {
     // Apply the offset in headset space so pitch, yaw and roll are all respected.
     Matrix(head.0.map(|[right, up, back, position]| {

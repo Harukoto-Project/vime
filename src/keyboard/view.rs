@@ -38,8 +38,12 @@ pub struct VrKeys {
 }
 
 impl VrKeys {
-    pub fn action_at(&self, [u, v]: [f32; 2]) -> Option<Action> {
-        let position = self.rect.min + Vec2::new(u * self.rect.width(), v * self.rect.height());
+    pub fn position(&self, [u, v]: [f32; 2]) -> Pos2 {
+        self.rect.min + Vec2::new(u * self.rect.width(), v * self.rect.height())
+    }
+
+    pub fn action_at(&self, uv: [f32; 2]) -> Option<Action> {
+        let position = self.position(uv);
         self.keys
             .iter()
             .filter(|(rect, _)| rect.expand(2.).contains(position))

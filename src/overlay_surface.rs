@@ -1,5 +1,8 @@
 use eframe::{
-    egui::{self, Event, FontDefinitions, Pos2, RawInput, Rect, Ui, Vec2, Visuals},
+    egui::{
+        self, Color32, Event, FontDefinitions, Pos2, RawInput, Rect, Shape, Ui, Vec2, Visuals,
+        epaint::ClippedShape,
+    },
     glow::{self, HasContext},
 };
 use std::{
@@ -14,11 +17,25 @@ pub struct OverlaySurface {
     context: egui::Context,
     painter: egui_glow::Painter,
     gl: Arc<glow::Context>,
-    framebuffer: glow::Framebuffer,
-    texture: glow::Texture,
+    target: Target,
+    background: Option<Target>,
     size: [u32; 2],
     pending: bool,
     retry_after: Option<Instant>,
+}
+
+struct Target {
+    framebuffer: glow::Framebuffer,
+    texture: glow::Texture,
+}
+
+impl Target {
+    fn destroy(self, gl: &glow::Context) {
+        unsafe {
+            gl.delete_framebuffer(self.framebuffer);
+            gl.delete_texture(self.texture);
+        }
+    }
 }
 
 impl OverlaySurface {
@@ -27,15 +44,28 @@ impl OverlaySurface {
         fonts: FontDefinitions,
         visuals: Visuals,
         size: [u32; 2],
+        cache_background: bool,
     ) -> Result<Self, String> {
         let mut painter = egui_glow::Painter::new(gl.clone(), "", None, false)
             .map_err(|error| error.to_string())?;
-        let (framebuffer, texture) = match make_target(&gl, size) {
+        let target = match make_target(&gl, size) {
             Ok(target) => target,
             Err(error) => {
                 painter.destroy();
                 return Err(error);
             }
+        };
+        let background = if cache_background {
+            match make_target(&gl, size) {
+                Ok(background) => Some(background),
+                Err(error) => {
+                    target.destroy(&gl);
+                    painter.destroy();
+                    return Err(error);
+                }
+            }
+        } else {
+            None
         };
         let context = egui::Context::default();
         context.set_fonts(fonts);
@@ -50,8 +80,8 @@ impl OverlaySurface {
             context,
             painter,
             gl,
-            framebuffer,
-            texture,
+            target,
+            background,
             size,
             pending: false,
             retry_after: None,
@@ -82,8 +112,9 @@ impl OverlaySurface {
             let read = self
                 .gl
                 .get_parameter_framebuffer(glow::READ_FRAMEBUFFER_BINDING);
+            let target = self.background.as_ref().unwrap_or(&self.target);
             self.gl
-                .bind_framebuffer(glow::FRAMEBUFFER, Some(self.framebuffer));
+                .bind_framebuffer(glow::FRAMEBUFFER, Some(target.framebuffer));
             self.painter.clear(self.size, [0.0; 4]);
             self.painter.paint_and_update_textures(
                 self.size,
@@ -95,8 +126,70 @@ impl OverlaySurface {
             self.gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, draw);
             self.gl.bind_framebuffer(glow::READ_FRAMEBUFFER, read);
         }
-        self.pending = true;
+        self.pending = self.background.is_none();
         result.expect("egui invokes the overlay draw callback")
+    }
+
+    pub fn compose_pointers(&mut self, pointers: [Option<(Pos2, bool)>; 2]) {
+        let Some(background) = &self.background else {
+            return;
+        };
+        let [width, height] = self.size;
+        let clip_rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(width as f32, height as f32));
+        let colors = [
+            Color32::from_rgb(215, 194, 255),
+            Color32::from_rgb(159, 211, 255),
+        ];
+        let shapes: Vec<_> = pointers
+            .into_iter()
+            .zip(colors)
+            .filter_map(|(pointer, color)| {
+                let (position, down) = pointer?;
+                let radius = if down { 6. } else { 4.5 };
+                Some([
+                    Shape::circle_filled(position, radius + 2., Color32::from_rgb(14, 39, 61)),
+                    Shape::circle_filled(position, radius, color),
+                ])
+            })
+            .flatten()
+            .map(|shape| ClippedShape { clip_rect, shape })
+            .collect();
+
+        // Restore the keyboard from its GPU texture before adding the current pointers.
+        // This also removes the previous pointers without rerunning the keyboard layout.
+        unsafe {
+            let draw = self
+                .gl
+                .get_parameter_framebuffer(glow::DRAW_FRAMEBUFFER_BINDING);
+            let read = self
+                .gl
+                .get_parameter_framebuffer(glow::READ_FRAMEBUFFER_BINDING);
+            self.gl.disable(glow::SCISSOR_TEST);
+            self.gl
+                .bind_framebuffer(glow::READ_FRAMEBUFFER, Some(background.framebuffer));
+            self.gl
+                .bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(self.target.framebuffer));
+            self.gl.blit_framebuffer(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                0,
+                0,
+                width as i32,
+                height as i32,
+                glow::COLOR_BUFFER_BIT,
+                glow::NEAREST,
+            );
+            if !shapes.is_empty() {
+                let primitives = self.context.tessellate(shapes, 1.);
+                self.painter.paint_primitives(self.size, 1., &primitives);
+            }
+            self.gl.flush();
+            self.gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, draw);
+            self.gl.bind_framebuffer(glow::READ_FRAMEBUFFER, read);
+        }
+        self.pending = true;
     }
 
     pub fn reset(&mut self) {
@@ -119,7 +212,7 @@ impl OverlaySurface {
             let read = self
                 .gl
                 .get_parameter_framebuffer(glow::READ_FRAMEBUFFER_BINDING);
-            let result = submit(self.texture.0);
+            let result = submit(self.target.texture.0);
             self.gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, draw);
             self.gl.bind_framebuffer(glow::READ_FRAMEBUFFER, read);
             result
@@ -133,17 +226,14 @@ impl OverlaySurface {
 
     pub fn destroy(mut self) {
         self.painter.destroy();
-        unsafe {
-            self.gl.delete_framebuffer(self.framebuffer);
-            self.gl.delete_texture(self.texture);
+        self.target.destroy(&self.gl);
+        if let Some(background) = self.background {
+            background.destroy(&self.gl);
         }
     }
 }
 
-fn make_target(
-    gl: &glow::Context,
-    size: [u32; 2],
-) -> Result<(glow::Framebuffer, glow::Texture), String> {
+fn make_target(gl: &glow::Context, size: [u32; 2]) -> Result<Target, String> {
     unsafe {
         let framebuffer = gl.create_framebuffer()?;
         let texture = match gl.create_texture() {
@@ -194,7 +284,10 @@ fn make_target(
             gl.delete_texture(texture);
             return Err("VR の描画先を作成できません".into());
         }
-        Ok((framebuffer, texture))
+        Ok(Target {
+            framebuffer,
+            texture,
+        })
     }
 }
 

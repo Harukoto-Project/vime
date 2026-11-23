@@ -12,7 +12,7 @@ use std::{env, fs, path::PathBuf, sync::Arc, time::Duration};
 use vime::{
     output,
     settings::{Destination, Settings},
-    steamvr::{SteamVr, Surface},
+    steamvr::{Pointer, SteamVr, Surface},
 };
 
 const BACKGROUND: Color32 = Color32::from_rgb(20, 26, 35);
@@ -57,6 +57,8 @@ struct App {
     world_keys: Option<VrKeys>,
     pending_world_keys: Option<VrKeys>,
     last_world: Option<(u64, Destination)>,
+    pointers: [Option<Pointer>; 2],
+    last_pointers: [Option<Pointer>; 2],
     dashboard_revision: Option<u64>,
     draw_errors: [Option<String>; 2],
     steamvr_message: String,
@@ -71,8 +73,9 @@ struct Surfaces {
 
 impl Surfaces {
     fn new(gl: Arc<eframe::glow::Context>, fonts: FontDefinitions) -> Result<Self, String> {
-        let keyboard = OverlaySurface::new(gl.clone(), fonts.clone(), visuals(), keyboard::SIZE)?;
-        match OverlaySurface::new(gl, fonts, visuals(), dashboard::SIZE) {
+        let keyboard =
+            OverlaySurface::new(gl.clone(), fonts.clone(), visuals(), keyboard::SIZE, true)?;
+        match OverlaySurface::new(gl, fonts, visuals(), dashboard::SIZE, false) {
             Ok(dashboard) => Ok(Self {
                 keyboard,
                 dashboard,
@@ -131,6 +134,8 @@ impl App {
             world_keys: None,
             pending_world_keys: None,
             last_world: None,
+            pointers: [None; 2],
+            last_pointers: [None; 2],
             dashboard_revision: None,
             draw_errors: [None, None],
             steamvr_message: String::new(),
@@ -199,6 +204,8 @@ impl App {
         self.world_keys = None;
         self.pending_world_keys = None;
         self.last_world = None;
+        self.pointers = [None; 2];
+        self.last_pointers = [None; 2];
         self.draw_errors[0] = None;
     }
 
@@ -207,6 +214,8 @@ impl App {
         self.world_keys = None;
         self.pending_world_keys = None;
         self.last_world = None;
+        self.pointers = [None; 2];
+        self.last_pointers = [None; 2];
         self.dashboard.reset();
         self.draw_errors = [None, None];
         if let Ok(surfaces) = &mut self.surfaces {
@@ -267,18 +276,33 @@ impl App {
         };
         if vr.visible() {
             let frame = (self.keyboard.revision, self.settings.destination);
-            if self.last_world != Some(frame) {
+            let keyboard_changed = self.last_world != Some(frame);
+            if keyboard_changed {
                 self.last_world = Some(frame);
                 self.pending_world_keys = Some(surfaces.keyboard.render(Vec::new(), |ui| {
                     keyboard::show_vr(ui, &self.keyboard, self.settings.destination)
                 }));
             }
+            if keyboard_changed || self.pointers != self.last_pointers {
+                let keys = self
+                    .pending_world_keys
+                    .as_ref()
+                    .or(self.world_keys.as_ref());
+                let pointers = self.pointers.map(|pointer| {
+                    let pointer = pointer?;
+                    Some((keys?.position(pointer.uv), pointer.down))
+                });
+                surfaces.keyboard.compose_pointers(pointers);
+                self.last_pointers = self.pointers;
+            }
             if let Some(result) = surfaces
                 .keyboard
                 .present(|texture| vr.present(Surface::Keyboard, texture))
             {
-                if result.is_ok() {
-                    self.world_keys = self.pending_world_keys.take();
+                if result.is_ok()
+                    && let Some(keys) = self.pending_world_keys.take()
+                {
+                    self.world_keys = Some(keys);
                 }
                 self.draw_errors[0] = result.err();
             }
@@ -517,6 +541,14 @@ impl eframe::App for App {
                 if frame.toggle {
                     self.toggle();
                 } else {
+                    self.pointers = frame.pointers.map(|pointer| {
+                        pointer.map(|mut pointer| {
+                            for (axis, pixels) in pointer.uv.iter_mut().zip(keyboard::SIZE) {
+                                *axis = (*axis * pixels as f32).round() / pixels as f32;
+                            }
+                            pointer
+                        })
+                    });
                     self.world_key_presses(frame.keyboard_presses);
                 }
             }
@@ -525,6 +557,7 @@ impl eframe::App for App {
             let visible = vr.visible() || self.dashboard.active;
             let keyboard_changed = vr.visible()
                 && (self.last_world != Some((self.keyboard.revision, self.settings.destination))
+                    || self.pointers != self.last_pointers
                     || self.draw_errors[0].is_some());
             let dashboard_changed = self.dashboard.redraw
                 || self.draw_errors[1].is_some()
