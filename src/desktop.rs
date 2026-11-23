@@ -16,6 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 use vime::{
+    brand,
     i18n::{self, Lang, tr, tr_args},
     output,
     settings::{Destination, Settings},
@@ -37,6 +38,7 @@ pub fn run() -> eframe::Result {
         viewport: ViewportBuilder::default()
             .with_inner_size([980., 826.])
             .with_min_inner_size([670., 560.])
+            .with_icon(brand::icon())
             .with_app_id("org.harukoto.vime"),
         renderer: eframe::Renderer::Glow,
         glow_options: egui_glow::GlowConfiguration {
@@ -450,7 +452,7 @@ impl App {
         ui.style_mut().spacing.interact_size.y = 30.;
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(RichText::new("ViME").size(35.).strong().color(INK));
+                brand::wordmark(ui, 26.);
                 ui.label(
                     RichText::new(tr("SteamVR向け IMEキーボード"))
                         .size(15.)

@@ -2,7 +2,10 @@ mod abi;
 mod actions;
 mod geometry;
 
-use crate::i18n::{tr, tr_args};
+use crate::{
+    brand,
+    i18n::{tr, tr_args},
+};
 use abi::{
     ActionPose, ActionSet, Applications, Digital, Event, Input, Matrix, Overlay, Pose, System,
     Texture,
@@ -251,26 +254,10 @@ impl SteamVr {
         )?;
 
         // The static icon is submitted once. Interactive panels use persistent GL textures.
-        let icon: Vec<_> = (0..64)
-            .flat_map(|y| {
-                (0..64).flat_map(move |x| {
-                    let case = (8..56).contains(&x) && (17..47).contains(&y);
-                    let keys = [22, 29].iter().any(|row| (*row..row + 4).contains(&y))
-                        && (14..50).contains(&x)
-                        && (x - 14) % 7 < 4;
-                    let space = (37..41).contains(&y) && (21..43).contains(&x);
-                    if keys || space {
-                        [191, 226, 255, 255]
-                    } else if case {
-                        [44, 65, 91, 255]
-                    } else {
-                        [0, 0, 0, 0]
-                    }
-                })
-            })
-            .collect();
         if thumbnail != 0 {
-            self.overlay.set_raw(thumbnail, icon.as_ptr(), 64, 64, 4);
+            let icon = brand::icon();
+            self.overlay
+                .set_raw(thumbnail, icon.rgba.as_ptr(), icon.width, icon.height, 4);
         }
         Ok(())
     }

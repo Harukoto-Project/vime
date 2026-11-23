@@ -6,6 +6,7 @@ mod korean;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub use conversion::{Conversion, Segment};
+pub use japanese::key_label as japanese_key_label;
 pub use japanese::warm_up as warm_up_dictionary;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -56,11 +57,9 @@ impl Composer {
         }
         match self.language {
             Language::Japanese
-                if key.is_ascii_alphabetic()
-                    || key == '-'
-                    || (key == '\'' && self.reading.ends_with('n')) =>
+                if key.is_ascii_alphabetic() || key.is_ascii_punctuation() || key == '¥' =>
             {
-                self.reading.push(key.to_ascii_lowercase());
+                self.reading.push(key);
             }
             Language::Korean if korean::key_label(key).is_some() => self.reading.push(key),
             _ => self.insert(&key.to_string()),
@@ -244,7 +243,11 @@ impl Composer {
         if self.language == Language::Japanese {
             let katakana = japanese::katakana(&reading);
             if !candidates.contains(&katakana) {
-                candidates.push(katakana);
+                candidates.push(katakana.clone());
+            }
+            let halfwidth = japanese::halfwidth(&katakana);
+            if !candidates.contains(&halfwidth) {
+                candidates.push(halfwidth);
             }
         }
         candidates

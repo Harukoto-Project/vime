@@ -69,7 +69,8 @@ static SYLLABLES: LazyLock<[Vec<RomanSyllable>; 26]> = LazyLock::new(|| {
 
 pub fn kana(input: &str, finalizing: bool) -> String {
     let mut result = String::new();
-    let mut rest = input;
+    let lowercase = input.to_ascii_lowercase();
+    let mut rest = lowercase.as_str();
     while let Some(&first) = rest.as_bytes().first() {
         let next = rest.as_bytes().get(1).copied();
         // A bare run of three or more n's is literal. Keep the explicit nn and n'
@@ -81,7 +82,8 @@ pub fn kana(input: &str, finalizing: bool) -> String {
                 .get(len)
                 .is_none_or(|byte| !byte.is_ascii_alphabetic() && *byte != b'\'')
             {
-                result.push_str(&rest[..len]);
+                let offset = input.len() - rest.len();
+                result.push_str(&input[offset..offset + len]);
                 rest = &rest[len..];
                 continue;
             }
@@ -112,6 +114,11 @@ pub fn kana(input: &str, finalizing: bool) -> String {
                     result.push('ん');
                     break;
                 }
+                Some(next) if !next.is_ascii_alphabetic() => {
+                    result.push('ん');
+                    rest = &rest[1..];
+                    continue;
+                }
                 _ => {}
             }
         }
@@ -124,21 +131,27 @@ pub fn kana(input: &str, finalizing: bool) -> String {
             rest = &rest[1..];
             continue;
         }
-        if first == b'-' {
-            result.push('ー');
-            rest = &rest[1..];
-            continue;
-        }
         if let Some((roman, kana)) = syllable(rest) {
             result.push_str(kana);
             rest = &rest[roman.len()..];
         } else {
-            let ch = rest.chars().next().unwrap();
-            result.push(ch);
+            let ch = input[input.len() - rest.len()..].chars().next().unwrap();
+            result.push(key_label(ch));
             rest = &rest[ch.len_utf8()..];
         }
     }
     result
+}
+
+pub fn key_label(key: char) -> char {
+    match key {
+        ',' => '、',
+        '.' => '。',
+        '-' => 'ー',
+        '¥' => '￥',
+        key if key.is_ascii_punctuation() => char::from_u32(key as u32 + 0xfee0).unwrap(),
+        _ => key,
+    }
 }
 
 fn syllable(rest: &str) -> Option<RomanSyllable> {
@@ -160,6 +173,43 @@ pub fn katakana(value: &str) -> String {
             _ => c,
         })
         .collect()
+}
+
+pub fn halfwidth(value: &str) -> String {
+    const KANA: &str = "ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン";
+    const VOICED: &str = "ガギグゲゴザジズゼゾダヂヅデドバビブベボヴヷヺ";
+    const BASE: &str = "カキクケコサシスセソタチツテトハヒフヘホウワヲ";
+    const SEMIVOICED: &str = "パピプペポ";
+
+    let mut result = String::new();
+    for ch in value.chars() {
+        let (base, mark) = if let Some(index) = VOICED.chars().position(|voiced| voiced == ch) {
+            (BASE.chars().nth(index).unwrap(), Some('ﾞ'))
+        } else if let Some(index) = SEMIVOICED.chars().position(|voiced| voiced == ch) {
+            ("ハヒフヘホ".chars().nth(index).unwrap(), Some('ﾟ'))
+        } else {
+            (ch, None)
+        };
+        let narrow = match base {
+            '、' => ',',
+            '。' => '.',
+            '「' => '｢',
+            '」' => '｣',
+            '・' => '･',
+            '\u{3099}' | '゛' => 'ﾞ',
+            '\u{309a}' | '゜' => 'ﾟ',
+            '￥' => '¥',
+            '！'..='～' => char::from_u32(base as u32 - 0xfee0).unwrap(),
+            _ => KANA
+                .chars()
+                .position(|kana| kana == base)
+                .and_then(|index| char::from_u32(0xff66 + index as u32))
+                .unwrap_or(base),
+        };
+        result.push(narrow);
+        result.extend(mark);
+    }
+    result
 }
 
 /// Loads the dictionary index now so that the first conversion does not stall.
@@ -239,7 +289,15 @@ fn clause_candidates(reading: &str, best: Option<&str>) -> Vec<String> {
     }
     candidates.truncate(MAX_CANDIDATES);
     push(&mut candidates, reading);
-    push(&mut candidates, &katakana(reading));
+    let katakana = katakana(reading);
+    push(&mut candidates, &katakana);
+    let halfwidth = halfwidth(&katakana);
+    if !candidates.contains(&halfwidth) {
+        candidates.insert(candidates.len().min(2), halfwidth);
+    }
+    if reading.chars().all(|ch| ch == 'ー') {
+        push(&mut candidates, &"-".repeat(reading.chars().count()));
+    }
     candidates
 }
 
@@ -249,17 +307,31 @@ fn split_clauses(reading: &str) -> Vec<&str> {
     let mut clauses = Vec::new();
     let mut rest = reading;
     while !rest.is_empty() {
-        let mut ends: Vec<usize> = rest
+        let is_kana = |ch| matches!(ch, 'ぁ'..='ゖ' | 'ー');
+        let kana_run = is_kana(rest.chars().next().unwrap());
+        let run_end = rest
             .char_indices()
-            .map(|(index, _)| index)
+            .find_map(|(index, ch)| (is_kana(ch) != kana_run).then_some(index))
+            .unwrap_or(rest.len());
+        if !kana_run {
+            clauses.push(&rest[..run_end]);
+            rest = &rest[run_end..];
+            continue;
+        }
+        let mut ends: Vec<usize> = rest[..run_end]
+            .char_indices()
             .skip(1)
+            .filter_map(|(index, ch)| {
+                (!"ぁぃぅぇぉゃゅょっゎゕゖー".contains(ch) && !rest[..index].ends_with('っ'))
+                    .then_some(index)
+            })
             .collect();
-        ends.push(rest.len());
+        ends.push(run_end);
         let head = ends
             .into_iter()
             .rev()
             .find(|&end| entries(&rest[..end]).next().is_some());
-        let mut end = head.unwrap_or_else(|| rest.chars().next().map_or(0, char::len_utf8));
+        let mut end = head.unwrap_or(run_end);
         while let Some(particle) = PARTICLES
             .iter()
             .find(|particle| rest[end..].starts_with(*particle))

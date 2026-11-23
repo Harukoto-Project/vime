@@ -4,6 +4,7 @@ use crate::{
 };
 use eframe::egui::{self, Color32, Event, Frame, Margin, Pos2, RichText, Stroke, Ui};
 use vime::{
+    brand,
     i18n::{Lang, tr, tr_args},
     settings::{Destination, Settings},
     steamvr::DashboardEvent,
@@ -124,7 +125,7 @@ impl Dashboard {
             .inner_margin(Margin::symmetric(32, 21))
             .show(ui, |ui| {
                 ui.set_min_size(egui::vec2(SIZE[0] as f32 - 64., SIZE[1] as f32 - 42.));
-                ui.label(RichText::new("ViME").size(33.).strong());
+                brand::wordmark(ui, 25.);
                 ui.add_space(4.);
                 let large = ui.style_mut();
                 large.spacing.interact_size.y = 38.;

@@ -6,8 +6,9 @@ use eframe::egui::{
 };
 use std::sync::Arc;
 use vime::{
+    brand,
     i18n::tr,
-    ime::{Language, hangul_key_label, search_emoji},
+    ime::{Language, hangul_key_label, japanese_key_label, search_emoji},
     output::CHAT_LIMIT,
     settings::Destination,
 };
@@ -118,6 +119,7 @@ fn draw(
     } else {
         view.keys(keyboard, destination);
     }
+    view.emoji_toggle(keyboard.emoji);
     (
         Interaction {
             action: view.action,
@@ -189,12 +191,13 @@ impl Board<'_> {
     }
 
     fn header(&mut self, keyboard: &Keyboard, can_close: bool) {
-        self.label(
-            self.box_at(24., 18., 110., 32.),
-            Align2::LEFT_CENTER,
-            "ViME",
-            24.,
-            INK,
+        let wordmark = brand::wordmark_texture(self.ui);
+        let size = wordmark.size_vec2();
+        self.ui.painter().image(
+            wordmark.id(),
+            self.box_at(24., 26., 18. * size.x / size.y, 18.),
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
+            Color32::WHITE,
         );
         let track = self.box_at(248., 15., 348., 40.);
         self.ui
@@ -213,17 +216,6 @@ impl Board<'_> {
                 Action::Language(language),
             );
         }
-        self.button(
-            self.box_at(if can_close { 664. } else { 746. }, 15., 91., 40.),
-            tr("絵文字"),
-            16.,
-            if keyboard.emoji {
-                Face::Selected
-            } else {
-                Face::Key
-            },
-            Action::ToggleEmoji,
-        );
         if can_close {
             self.button(
                 self.box_at(766., 15., 71., 40.),
@@ -481,6 +473,13 @@ impl Board<'_> {
     fn ansi_keys(&mut self, keyboard: &Keyboard, language: Language, has_text: bool, enter: Face) {
         let shift = keyboard.shift;
         let hangul = language == Language::Korean && !keyboard.direct_input();
+        let label_hangul = |key| {
+            if hangul {
+                hangul_key_label(key).unwrap_or(key)
+            } else {
+                key
+            }
+        };
         let shift_face = if shift { Face::Selected } else { Face::Key };
         self.physical_chars(
             0,
@@ -490,7 +489,7 @@ impl Board<'_> {
             } else {
                 "`1234567890-="
             },
-            false,
+            |key| key,
         );
         self.button(
             self.jis_rect(0, 13., 2.),
@@ -507,7 +506,7 @@ impl Board<'_> {
             } else {
                 "qwertyuiop[]"
             },
-            hangul,
+            label_hangul,
         );
         let slash = if shift { '|' } else { '\\' };
         self.button(
@@ -521,7 +520,7 @@ impl Board<'_> {
             2,
             1.75,
             if shift { "ASDFGHJKL:\"" } else { "asdfghjkl;'" },
-            hangul,
+            label_hangul,
         );
         self.button(
             self.jis_rect(2, 12.75, 2.25),
@@ -541,7 +540,7 @@ impl Board<'_> {
             3,
             2.25,
             if shift { "ZXCVBNM<>?" } else { "zxcvbnm,./" },
-            hangul,
+            label_hangul,
         );
         self.button(
             self.jis_rect(3, 12.25, 2.75),
@@ -585,20 +584,17 @@ impl Board<'_> {
         )
     }
 
-    fn jis_chars(&mut self, row: usize, start: f32, chars: &str) {
-        self.physical_chars(row, start, chars, false);
-    }
-
-    fn physical_chars(&mut self, row: usize, start: f32, chars: &str, hangul: bool) {
+    fn physical_chars(
+        &mut self,
+        row: usize,
+        start: f32,
+        chars: &str,
+        label: impl Fn(char) -> char,
+    ) {
         for (offset, key) in chars.chars().enumerate() {
             self.button(
                 self.jis_rect(row, start + offset as f32, 1.),
-                &if hangul {
-                    hangul_key_label(key).unwrap_or(key)
-                } else {
-                    key
-                }
-                .to_string(),
+                &label(key).to_string(),
                 20.,
                 Face::Key,
                 Action::Key(key),
@@ -610,6 +606,7 @@ impl Board<'_> {
         let shift = keyboard.shift;
         let direct = keyboard.direct_input();
         let shift_face = if shift { Face::Selected } else { Face::Key };
+        let label = |key| if direct { key } else { japanese_key_label(key) };
 
         self.button(
             self.jis_rect(0, 0., 1.),
@@ -618,7 +615,7 @@ impl Board<'_> {
             if direct { Face::Selected } else { Face::Key },
             Action::ToggleDirect,
         );
-        self.jis_chars(
+        self.physical_chars(
             0,
             1.,
             if shift {
@@ -626,6 +623,7 @@ impl Board<'_> {
             } else {
                 "1234567890-^¥"
             },
+            label,
         );
         self.button(
             self.jis_rect(0, 14., 1.),
@@ -638,7 +636,7 @@ impl Board<'_> {
         // Tab and Caps Lock occupy the empty space before Q and A. The two-row
         // Enter shares the final 1.5u of this row and the final 1.25u of the row
         // below.
-        self.jis_chars(
+        self.physical_chars(
             1,
             1.5,
             if shift {
@@ -646,8 +644,9 @@ impl Board<'_> {
             } else {
                 "qwertyuiop@["
             },
+            label,
         );
-        self.jis_chars(
+        self.physical_chars(
             2,
             1.75,
             if shift {
@@ -655,6 +654,7 @@ impl Board<'_> {
             } else {
                 "asdfghjkl;:]"
             },
+            label,
         );
         self.jis_enter(enter);
 
@@ -665,7 +665,12 @@ impl Board<'_> {
             shift_face,
             Action::Shift,
         );
-        self.jis_chars(3, 2.25, if shift { "ZXCVBNM<>?_" } else { "zxcvbnm,./\\" });
+        self.physical_chars(
+            3,
+            2.25,
+            if shift { "ZXCVBNM<>?_" } else { "zxcvbnm,./\\" },
+            label,
+        );
         self.button(
             self.jis_rect(3, 13.25, 1.75),
             "Shift",
@@ -737,6 +742,16 @@ impl Board<'_> {
         );
     }
 
+    fn emoji_toggle(&mut self, open: bool) {
+        self.button(
+            self.box_at(22., 364., 60., 40.),
+            "😃",
+            22.,
+            if open { Face::Selected } else { Face::Key },
+            Action::ToggleEmoji,
+        );
+    }
+
     fn emoji(&mut self, keyboard: &Keyboard, destination: Destination) {
         let total_pages = search_emoji("").count().div_ceil(EMOJI_PAGE_SIZE);
         for (index, emoji) in search_emoji("")
@@ -759,7 +774,7 @@ impl Board<'_> {
             );
         }
         self.label(
-            self.box_at(24., 364., 220., 38.),
+            self.box_at(94., 364., 220., 38.),
             Align2::LEFT_CENTER,
             tr("絵文字・記号"),
             15.,
