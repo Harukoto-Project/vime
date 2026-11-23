@@ -9,6 +9,7 @@ use vime::{
 };
 
 pub const SIZE: [u32; 2] = [1040, 640];
+const MAX_PENDING_INPUTS: usize = 128;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum Page {
@@ -57,6 +58,10 @@ impl Dashboard {
             }
         }
         for event in events {
+            if self.events.len() >= MAX_PENDING_INPUTS {
+                self.events.clear();
+                self.leave();
+            }
             match event {
                 DashboardEvent::Move([x, y]) if x.is_finite() && y.is_finite() => {
                     let position = Pos2::new(x, y);

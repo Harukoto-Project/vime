@@ -8,7 +8,12 @@ use eframe::egui::{
     self, Align, Button, Color32, FontData, FontDefinitions, FontFamily, Frame, Layout, Margin,
     RichText, ScrollArea, Stroke, Ui, ViewportBuilder,
 };
-use std::{env, fs, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    env, fs,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use vime::{
     output,
     settings::{Destination, Settings},
@@ -59,6 +64,7 @@ struct App {
     last_world: Option<(u64, Destination)>,
     pointers: [Option<Pointer>; 2],
     last_pointers: [Option<Pointer>; 2],
+    paint_requested: bool,
     dashboard_revision: Option<u64>,
     draw_errors: [Option<String>; 2],
     steamvr_message: String,
@@ -136,6 +142,7 @@ impl App {
             last_world: None,
             pointers: [None; 2],
             last_pointers: [None; 2],
+            paint_requested: false,
             dashboard_revision: None,
             draw_errors: [None, None],
             steamvr_message: String::new(),
@@ -274,7 +281,8 @@ impl App {
         let (Some(vr), Ok(surfaces)) = (&mut self.vr, &mut self.surfaces) else {
             return;
         };
-        if vr.visible() {
+        let now = Instant::now();
+        if vr.visible() && surfaces.keyboard.can_present(now) {
             let frame = (self.keyboard.revision, self.settings.destination);
             let keyboard_changed = self.last_world != Some(frame);
             if keyboard_changed {
@@ -283,7 +291,9 @@ impl App {
                     keyboard::show_vr(ui, &self.keyboard, self.settings.destination)
                 }));
             }
-            if keyboard_changed || self.pointers != self.last_pointers {
+            if keyboard_changed
+                || pointer_changed(&surfaces.keyboard, now, self.last_pointers, self.pointers)
+            {
                 let keys = self
                     .pending_world_keys
                     .as_ref()
@@ -310,7 +320,10 @@ impl App {
 
         let mut command = None;
         let revision = Some(self.keyboard.revision);
-        if self.dashboard.redraw || (self.dashboard.active && self.dashboard_revision != revision) {
+        if surfaces.dashboard.can_present(now)
+            && (self.dashboard.redraw
+                || (self.dashboard.active && self.dashboard_revision != revision))
+        {
             self.dashboard.redraw = false;
             self.dashboard_revision = revision;
             let events = self.dashboard.take_events();
@@ -553,17 +566,21 @@ impl eframe::App for App {
                 }
             }
         }
-        if let Some(vr) = &self.vr {
+        if let (Some(vr), Ok(surfaces)) = (&self.vr, &self.surfaces) {
             let visible = vr.visible() || self.dashboard.active;
+            let now = Instant::now();
             let keyboard_changed = vr.visible()
+                && surfaces.keyboard.can_present(now)
                 && (self.last_world != Some((self.keyboard.revision, self.settings.destination))
-                    || self.pointers != self.last_pointers
+                    || pointer_changed(&surfaces.keyboard, now, self.last_pointers, self.pointers)
                     || self.draw_errors[0].is_some());
-            let dashboard_changed = self.dashboard.redraw
-                || self.draw_errors[1].is_some()
-                || (self.dashboard.active
-                    && self.dashboard_revision != Some(self.keyboard.revision));
-            if keyboard_changed || dashboard_changed {
+            let dashboard_changed = surfaces.dashboard.can_present(now)
+                && (self.dashboard.redraw
+                    || self.draw_errors[1].is_some()
+                    || (self.dashboard.active
+                        && self.dashboard_revision != Some(self.keyboard.revision)));
+            if (keyboard_changed || dashboard_changed) && !self.paint_requested {
+                self.paint_requested = true;
                 context.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
             }
             // Poll VR independently of the desktop monitor's refresh rate.
@@ -576,6 +593,7 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        self.paint_requested = false;
         self.paint_overlay();
         if ui.input(|input| input.viewport().minimized == Some(true)) {
             return;
@@ -600,6 +618,18 @@ impl eframe::App for App {
             surfaces.dashboard.destroy();
         }
     }
+}
+
+fn pointer_changed(
+    surface: &OverlaySurface,
+    now: Instant,
+    previous: [Option<Pointer>; 2],
+    current: [Option<Pointer>; 2],
+) -> bool {
+    current != previous
+        && (surface.pointer_frame_due(now)
+            || current.map(|pointer| pointer.map(|pointer| pointer.down))
+                != previous.map(|pointer| pointer.map(|pointer| pointer.down)))
 }
 
 fn primary(label: &str) -> Button<'_> {

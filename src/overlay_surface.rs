@@ -12,6 +12,9 @@ use std::{
 };
 
 const RETRY_DELAY: Duration = Duration::from_millis(250);
+const CURSOR_INTERVAL: Duration = Duration::from_micros(16_667);
+const SLOW_CURSOR_INTERVAL: Duration = Duration::from_millis(50);
+const CURSOR_DAMAGE_MARGIN: f32 = 10.;
 
 pub struct OverlaySurface {
     context: egui::Context,
@@ -19,9 +22,12 @@ pub struct OverlaySurface {
     gl: Arc<glow::Context>,
     target: Target,
     background: Option<Target>,
+    background_changed: bool,
+    drawn_pointers: [Option<(Pos2, bool)>; 2],
     size: [u32; 2],
     pending: bool,
     retry_after: Option<Instant>,
+    next_pointer_frame: Option<Instant>,
 }
 
 struct Target {
@@ -82,9 +88,12 @@ impl OverlaySurface {
             gl,
             target,
             background,
+            background_changed: false,
+            drawn_pointers: [None; 2],
             size,
             pending: false,
             retry_after: None,
+            next_pointer_frame: None,
         })
     }
 
@@ -122,11 +131,11 @@ impl OverlaySurface {
                 &shapes,
                 &mut output.textures_delta,
             );
-            self.gl.flush();
             self.gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, draw);
             self.gl.bind_framebuffer(glow::READ_FRAMEBUFFER, read);
         }
         self.pending = self.background.is_none();
+        self.background_changed = self.background.is_some();
         result.expect("egui invokes the overlay draw callback")
     }
 
@@ -155,8 +164,8 @@ impl OverlaySurface {
             .map(|shape| ClippedShape::new(clip_rect, shape))
             .collect();
 
-        // Restore the keyboard from its GPU texture before adding the current pointers.
-        // This also removes the previous pointers without rerunning the keyboard layout.
+        // Restore the whole keyboard only when its content changes. Otherwise copy
+        // just the previous pointer footprints before stamping the new pointers.
         unsafe {
             let draw = self
                 .gl
@@ -169,32 +178,41 @@ impl OverlaySurface {
                 .bind_framebuffer(glow::READ_FRAMEBUFFER, Some(background.framebuffer));
             self.gl
                 .bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(self.target.framebuffer));
-            self.gl.blit_framebuffer(
-                0,
-                0,
-                width as i32,
-                height as i32,
-                0,
-                0,
-                width as i32,
-                height as i32,
-                glow::COLOR_BUFFER_BIT,
-                glow::NEAREST,
-            );
+            if self.background_changed {
+                blit_rect(&self.gl, self.size, clip_rect);
+            } else {
+                for (position, _) in self.drawn_pointers.into_iter().flatten() {
+                    let damage =
+                        Rect::from_center_size(position, Vec2::splat(CURSOR_DAMAGE_MARGIN * 2.));
+                    blit_rect(&self.gl, self.size, damage.intersect(clip_rect));
+                }
+            }
             if !shapes.is_empty() {
                 let primitives = self.context.tessellate(shapes, 1.);
                 self.painter.paint_primitives(self.size, 1., &primitives);
             }
-            self.gl.flush();
             self.gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, draw);
             self.gl.bind_framebuffer(glow::READ_FRAMEBUFFER, read);
         }
+        self.background_changed = false;
+        self.drawn_pointers = pointers;
         self.pending = true;
+    }
+
+    pub fn can_present(&self, now: Instant) -> bool {
+        self.retry_after.is_none_or(|retry| retry <= now)
+    }
+
+    pub fn pointer_frame_due(&self, now: Instant) -> bool {
+        self.next_pointer_frame.is_none_or(|next| next <= now)
     }
 
     pub fn reset(&mut self) {
         self.pending = false;
         self.retry_after = None;
+        self.next_pointer_frame = None;
+        self.background_changed = false;
+        self.drawn_pointers = [None; 2];
     }
 
     pub fn present(
@@ -202,7 +220,7 @@ impl OverlaySurface {
         submit: impl FnOnce(NonZeroU32) -> Result<(), String>,
     ) -> Option<Result<(), String>> {
         let now = Instant::now();
-        if !self.pending || self.retry_after.is_some_and(|retry| retry > now) {
+        if !self.pending || !self.can_present(now) {
             return None;
         }
         let result = unsafe {
@@ -212,14 +230,24 @@ impl OverlaySurface {
             let read = self
                 .gl
                 .get_parameter_framebuffer(glow::READ_FRAMEBUFFER_BINDING);
+            self.gl.flush();
             let result = submit(self.target.texture.0);
             self.gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, draw);
             self.gl.bind_framebuffer(glow::READ_FRAMEBUFFER, read);
             result
         };
         match &result {
-            Ok(()) => self.reset(),
-            Err(_) => self.retry_after = Some(now + RETRY_DELAY),
+            Ok(()) => {
+                self.pending = false;
+                self.retry_after = None;
+                if self.background.is_some() {
+                    let interval = (now.elapsed() * 2).clamp(CURSOR_INTERVAL, SLOW_CURSOR_INTERVAL);
+                    let previous_deadline = self.next_pointer_frame.unwrap_or(now).min(now);
+                    self.next_pointer_frame =
+                        Some((previous_deadline + interval).max(now + interval / 2));
+                }
+            }
+            Err(_) => self.retry_after = Some(Instant::now() + RETRY_DELAY),
         }
         Some(result)
     }
@@ -230,6 +258,28 @@ impl OverlaySurface {
         if let Some(background) = self.background {
             background.destroy(&self.gl);
         }
+    }
+}
+
+fn blit_rect(gl: &glow::Context, size: [u32; 2], rect: Rect) {
+    let x0 = rect.min.x.floor() as i32;
+    let x1 = rect.max.x.ceil() as i32;
+    // UI positions start at the top, OpenGL framebuffer coordinates at the bottom.
+    let y0 = size[1] as i32 - rect.max.y.ceil() as i32;
+    let y1 = size[1] as i32 - rect.min.y.floor() as i32;
+    unsafe {
+        gl.blit_framebuffer(
+            x0,
+            y0,
+            x1,
+            y1,
+            x0,
+            y0,
+            x1,
+            y1,
+            glow::COLOR_BUFFER_BIT,
+            glow::NEAREST,
+        );
     }
 }
 
