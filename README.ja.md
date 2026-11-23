@@ -56,29 +56,6 @@ cargo run --release --locked
 
 実行ファイルは `target/release/vime.exe` に生成されます。開発・変更の提出については [コントリビュートガイド](CONTRIBUTING.md) を参照してください。
 
-### 日本語の修正候補を設定する
-
-Windows x64 の Python 3.12 と DirectML 対応 GPU を用意し、ViME の誤字修正に **d1-2B（ローカル）** を選びます。**d1-2B と日本語モデルをダウンロード**、またはウェルカムページの **おすすめ設定で始める** を選ぶと、両方の準備が同時に始まります。d1-2B を取得済みの場合は **日本語モデルをダウンロード** が表示されます。入力中の推論はローカルで実行します。
-
-ソースから手動でモデルを準備する場合は、リポジトリのルートで次を実行し、ViME を再起動します。
-
-```powershell
-$vimeTypoDir = Join-Path $env:LOCALAPPDATA 'ViME\japanese-typo'
-py -3.12 -m venv "$vimeTypoDir\venv"
-$vimeTypoPython = Join-Path $vimeTypoDir 'venv\Scripts\python.exe'
-& $vimeTypoPython -m pip install onnxruntime-directml==1.24.4 sentencepiece==0.2.1 fugashi unidic-lite regex onnx onnxconverter-common transformers==4.57.6
-& $vimeTypoPython -m pip install --extra-index-url https://download.pytorch.org/whl/cpu 'torch==2.7.1+cpu'
-& $vimeTypoPython tools/prepare_japanese_typo.py
-```
-
-ウェルカムページの **または、自分で選ぶ** と、通常の **設定** の両方で **日本語の修正候補を表示する** を切り替えられます。**日本語の修正候補の詳細設定** では、検出しきい値（既定 `0.01`）、候補数（既定 `5`）、カーソルの左右それぞれの文字数（既定 `40`）、d1-2B で判定する最大位置数（既定 `2`）を変更できます。これらの値は `settings.json` の `typo.japanese` に保存されます。GPU が複数ある場合は、起動前に `VIME_JAPANESE_TYPO_ADAPTER` で DirectML のアダプター番号を指定できます。
-
-ウォームアップ後の DistilBERT、d1-2B、全体の処理時間を測るには、次を実行します。
-
-```powershell
-cargo test --locked japanese_typo_benchmark -- --ignored --nocapture
-```
-
 ## ライセンス
 
 [Apache License 2.0](LICENSE)

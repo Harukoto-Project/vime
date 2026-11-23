@@ -20,10 +20,9 @@ use vime::{
     brand,
     calibration::{self, Profile},
     i18n::{self, Lang, tr, tr_args},
-    japanese_typo,
     local_d1::{self, Download},
     misconversions, output,
-    settings::{D1Device, Destination, JapaneseTypoSettings, Settings, TypoProvider, TypoSettings},
+    settings::{D1Device, Destination, Settings, TypoProvider, TypoSettings},
     steamvr::{Pointer, SteamVr, Surface},
     update::{self, Update},
 };
@@ -38,12 +37,6 @@ const ERROR: Color32 = Color32::from_rgb(255, 177, 168);
 const WIDE_LAYOUT: f32 = 640.;
 const MAX_PAGE_WIDTH: f32 = 1080.;
 const HIDDEN_PAINT_RETRY: Duration = Duration::from_millis(50);
-const JAPANESE_TYPO_SETUP: &str = r#"$vimeTypoDir = Join-Path $env:LOCALAPPDATA 'ViME\japanese-typo'
-py -3.12 -m venv "$vimeTypoDir\venv"
-$vimeTypoPython = Join-Path $vimeTypoDir 'venv\Scripts\python.exe'
-& $vimeTypoPython -m pip install onnxruntime-directml==1.24.4 sentencepiece==0.2.1 fugashi unidic-lite regex onnx onnxconverter-common transformers==4.57.6
-& $vimeTypoPython -m pip install --extra-index-url https://download.pytorch.org/whl/cpu 'torch==2.7.1+cpu'
-& $vimeTypoPython tools/prepare_japanese_typo.py"#;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Welcome {
@@ -111,8 +104,6 @@ struct App {
     api_key_before_url: Option<(TypoProvider, String)>,
     model_download: Option<Download>,
     model_error: Option<std::io::Error>,
-    japanese_download: Option<japanese_typo::Download>,
-    japanese_download_error: Option<std::io::Error>,
     misconversion_download: Option<misconversions::Download>,
     misconversion_error: Option<std::io::Error>,
     calibration_job: Option<(String, CalibrationJob)>,
@@ -223,8 +214,6 @@ impl App {
             api_key_edits: HashMap::new(),
             api_key_before_url: None,
             model_download: None,
-            japanese_download: None,
-            japanese_download_error: None,
             misconversion_download: None,
             misconversion_error: None,
             model_error: None,
@@ -630,28 +619,13 @@ impl App {
     }
 
     fn start_model_download(&mut self, context: &egui::Context, device: D1Device) {
-        if self.model_download.is_none() && !local_d1::installed(&self.directory, device) {
-            let context = context.clone();
-            self.model_error = None;
-            match Download::start(self.directory.clone(), device, move || {
-                context.request_repaint()
-            }) {
-                Ok(download) => self.model_download = Some(download),
-                Err(error) => self.model_error = Some(error),
-            }
-        }
-        if self.draft.typo.japanese.enabled
-            && self.japanese_download.is_none()
-            && japanese_typo::model_directory(&self.directory).is_none()
-        {
-            let context = context.clone();
-            self.japanese_download_error = None;
-            match japanese_typo::Download::start(self.directory.clone(), move || {
-                context.request_repaint()
-            }) {
-                Ok(download) => self.japanese_download = Some(download),
-                Err(error) => self.japanese_download_error = Some(error),
-            }
+        let context = context.clone();
+        self.model_error = None;
+        match Download::start(self.directory.clone(), device, move || {
+            context.request_repaint()
+        }) {
+            Ok(download) => self.model_download = Some(download),
+            Err(error) => self.model_error = Some(error),
         }
     }
 
@@ -699,15 +673,6 @@ impl App {
                 .small()
                 .color(SECONDARY),
             );
-            if japanese_typo::model_directory(&self.directory).is_none() {
-                ui.label(
-                    RichText::new(tr(
-                        "Windows x64 版の Python 3.12 があれば、日本語モデルも同時に準備します",
-                    ))
-                    .small()
-                    .color(SECONDARY),
-                );
-            }
             ui.add_space(10.);
             ui.separator();
             ui.add_space(10.);
@@ -759,7 +724,9 @@ impl App {
                 self.settings_message.clear();
                 if choice == Welcome::Recommended {
                     let device = self.settings.typo.d1_device;
-                    self.start_model_download(context, device);
+                    if !local_d1::installed(&self.directory, device) {
+                        self.start_model_download(context, device);
+                    }
                     if !misconversions::installed(&self.directory) {
                         self.start_misconversion_download(context);
                     }
@@ -956,7 +923,6 @@ impl App {
         }
         if typo.provider == TypoProvider::D1Local {
             self.model_panel(ui);
-            self.japanese_typo_panel(ui);
         } else if matches!(typo.provider, TypoProvider::D1 | TypoProvider::Custom) {
             ui.label("System One URL");
             ui.add(system_one_field(&mut typo.url).hint_text("http://127.0.0.1:8080/v1/systemone"));
@@ -989,90 +955,6 @@ impl App {
                 .color(ERROR),
             );
         }
-    }
-
-    fn japanese_typo_panel(&mut self, ui: &mut Ui) {
-        ui.add_space(8.);
-        let japanese = &mut self.draft.typo.japanese;
-        ui.checkbox(&mut japanese.enabled, tr("日本語の修正候補を表示する"));
-        if let Some(download) = &self.japanese_download {
-            ui.horizontal_wrapped(|ui| {
-                ui.spinner();
-                ui.label(download.status());
-                if ui
-                    .add_enabled(
-                        !download.cancelling(),
-                        Button::new(tr("日本語モデルの準備を中止")),
-                    )
-                    .clicked()
-                {
-                    download.cancel();
-                }
-            });
-            ui.ctx().request_repaint_after(Duration::from_millis(150));
-        }
-        if !japanese.enabled {
-            return;
-        }
-        if let Some(error) = &self.japanese_download_error {
-            ui.label(
-                RichText::new(tr_args(
-                    "日本語モデルを準備できませんでした ({0})",
-                    &[&error.to_string()],
-                ))
-                .color(ERROR),
-            );
-        }
-        let installed = japanese_typo::model_directory(&self.directory).is_some();
-        let status = if installed {
-            tr("DistilBERT FP16 のモデルファイルを検出しました（DirectML）")
-        } else {
-            tr("日本語モデルのダウンロードには Windows x64 版の Python 3.12 が必要です")
-        };
-        ui.label(RichText::new(status).small().color(SECONDARY));
-        if !installed {
-            ui.collapsing(tr("日本語モデルのセットアップ手順"), |ui| {
-                ui.label(tr(
-                    "Windows x64 の Python 3.12 を用意し、ViME のソースフォルダーで次のコマンドを PowerShell で実行してください。",
-                ));
-                ui.add(egui::Label::new(RichText::new(JAPANESE_TYPO_SETUP).monospace()).wrap());
-                if ui.button(tr("セットアップコマンドをコピー")).clicked() {
-                    ui.ctx().copy_text(JAPANESE_TYPO_SETUP.into());
-                }
-            });
-        }
-        egui::CollapsingHeader::new(tr("日本語の修正候補の詳細設定"))
-            .id_salt("japanese_typo_advanced")
-            .show(ui, |ui| {
-                egui::Grid::new("japanese_typo_options").show(ui, |ui| {
-                    ui.label(tr("誤字検出の確率しきい値"));
-                    ui.add(
-                        egui::DragValue::new(&mut japanese.probability_threshold)
-                            .range(JapaneseTypoSettings::THRESHOLD_RANGE)
-                            .speed(0.001)
-                            .max_decimals(4),
-                    );
-                    ui.end_row();
-                    ui.label(tr("修正候補の最大件数"));
-                    ui.add(
-                        egui::DragValue::new(&mut japanese.candidates)
-                            .range(JapaneseTypoSettings::CANDIDATE_RANGE),
-                    );
-                    ui.end_row();
-                    ui.label(tr("カーソルの左右それぞれの文字数"));
-                    ui.add(
-                        egui::DragValue::new(&mut japanese.context_chars)
-                            .range(JapaneseTypoSettings::CONTEXT_RANGE),
-                    );
-                    ui.end_row();
-                    ui.label(tr("一度に判定する誤字位置の最大数"));
-                    ui.add(
-                        egui::DragValue::new(&mut japanese.max_positions)
-                            .range(JapaneseTypoSettings::POSITION_RANGE),
-                    );
-                    ui.end_row();
-                });
-            });
     }
 
     fn api_key_field(&mut self, ui: &mut Ui) {
@@ -1170,9 +1052,6 @@ impl App {
             self.model_error = None;
         }
         ui.label(RichText::new(tr("入力の判定はこの PC 内で行います")).small());
-        let needs_japanese = self.draft.typo.japanese.enabled
-            && self.japanese_download.is_none()
-            && japanese_typo::model_directory(&self.directory).is_none();
         if let Some(download) = &self.model_download {
             let received = download.received();
             let total = download.total();
@@ -1195,15 +1074,9 @@ impl App {
             ui.ctx().request_repaint_after(Duration::from_millis(150));
         } else if local_d1::installed(&self.directory, device) {
             ui.label(tr("d1-2B Q4_K_M をダウンロード済み"));
-            if needs_japanese && ui.button(tr("日本語モデルをダウンロード")).clicked()
-            {
-                self.start_model_download(ui.ctx(), device);
-            }
         } else {
             let bytes = local_d1::required_bytes(&self.directory, device) as f64;
-            let label = if needs_japanese {
-                tr("d1-2B と日本語モデルをダウンロード").to_owned()
-            } else if local_d1::model_available(&self.directory) {
+            let label = if local_d1::model_available(&self.directory) {
                 tr_args(
                     "推論エンジンをダウンロード（約 {0} MB）",
                     &[&format!("{:.0}", bytes / 1_000_000.)],
@@ -1533,20 +1406,6 @@ impl eframe::App for App {
             if local_d1::installed(&self.directory, self.settings.typo.d1_device) {
                 self.calibration_check = Instant::now();
                 self.keyboard.warm_local_typo();
-            }
-        }
-        if let Some(result) = self
-            .japanese_download
-            .as_ref()
-            .and_then(japanese_typo::Download::result)
-        {
-            self.japanese_download = None;
-            match result {
-                Ok(()) => self.keyboard.warm_local_typo(),
-                Err(error) if error.kind() != std::io::ErrorKind::Interrupted => {
-                    self.japanese_download_error = Some(error);
-                }
-                Err(_) => {}
             }
         }
         if let Some(result) = self

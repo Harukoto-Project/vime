@@ -3,10 +3,14 @@ mod download;
 use std::{
     env,
     io::{self, BufRead, BufReader},
-    os::windows::process::CommandExt,
+    mem::size_of,
+    os::windows::{
+        io::{AsRawHandle, FromRawHandle, OwnedHandle},
+        process::CommandExt,
+    },
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    ptr::null_mut,
+    process::{Child, Command, Stdio},
+    ptr::{null, null_mut},
     sync::{
         LazyLock,
         atomic::{AtomicU8, Ordering::Relaxed},
@@ -20,10 +24,17 @@ use serde::Deserialize;
 use serde_json::Value;
 use windows_sys::Win32::{
     Security::Cryptography::{BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom},
-    System::Threading::{BELOW_NORMAL_PRIORITY_CLASS, CREATE_NO_WINDOW},
+    System::{
+        JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        },
+        Threading::{BELOW_NORMAL_PRIORITY_CLASS, CREATE_NO_WINDOW},
+    },
 };
 
-use crate::{i18n::tr, job_process::Process, settings::D1Device, system_one::Client};
+use crate::{i18n::tr, settings::D1Device, system_one::Client};
 
 pub use download::{Download, MODEL_LICENSE, installed, model_available, required_bytes};
 
@@ -387,6 +398,51 @@ fn access_key() -> io::Result<String> {
         write!(&mut key, "{byte:02x}").expect("writing to a String succeeds");
     }
     Ok(key)
+}
+
+/// Closing the non-inheritable job also terminates the engine when ViME exits
+/// before Rust can run its normal destructors.
+struct Process {
+    child: Child,
+    _job: OwnedHandle,
+}
+
+impl Process {
+    fn spawn(command: &mut Command) -> io::Result<Self> {
+        let job = unsafe { CreateJobObjectW(null(), null()) };
+        if job.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let job = unsafe { OwnedHandle::from_raw_handle(job) };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if unsafe {
+            SetInformationJobObject(
+                job.as_raw_handle(),
+                JobObjectExtendedLimitInformation,
+                (&raw const limits).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let mut child = command.spawn()?;
+        if unsafe { AssignProcessToJobObject(job.as_raw_handle(), child.as_raw_handle()) } == 0 {
+            let error = io::Error::last_os_error();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        Ok(Self { child, _job: job })
+    }
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 #[cfg(test)]
