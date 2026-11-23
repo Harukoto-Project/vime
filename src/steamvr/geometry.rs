@@ -1,21 +1,13 @@
 use super::abi::Matrix;
 
-const DISTANCE: f32 = 1.15;
-const DROP: f32 = 0.31;
+const DISTANCE: f32 = 1.05;
+const DROP: f32 = 0.12;
 
 pub fn anchor(head: &Matrix) -> Matrix {
-    let [[_, _, x, tx], [_, _, _, ty], [_, _, z, tz]] = head.0;
-    let length = x.hypot(z);
-    let (x, z) = if length > 0.01 {
-        (x / length, z / length)
-    } else {
-        (0.0, 1.0)
-    };
-    Matrix([
-        [z, 0.0, x, tx - x * DISTANCE],
-        [0.0, 1.0, 0.0, ty - DROP],
-        [-x, 0.0, z, tz - z * DISTANCE],
-    ])
+    // Apply the offset in headset space so pitch, yaw and roll are all respected.
+    Matrix(head.0.map(|[right, up, back, position]| {
+        [right, up, back, position - up * DROP - back * DISTANCE]
+    }))
 }
 
 pub fn hit(panel: &Matrix, aim: &Matrix, width: f32, aspect: f32) -> Option<[f32; 2]> {

@@ -4,6 +4,7 @@ mod geometry;
 
 use abi::{
     ActionPose, ActionSet, Applications, Digital, Event, Input, Matrix, Overlay, Pose, System,
+    Texture, TextureBounds,
 };
 use libloading::Library;
 use std::{
@@ -26,7 +27,22 @@ pub struct Pointer {
 pub struct Frame {
     pub toggle: bool,
     pub pointer: Option<Pointer>,
+    pub dashboard_active: bool,
+    pub dashboard_events: Vec<DashboardEvent>,
     pub quit: bool,
+}
+
+#[derive(Clone, Copy)]
+pub enum DashboardEvent {
+    Move([f32; 2]),
+    Button(bool),
+    Leave,
+}
+
+#[derive(Clone, Copy)]
+pub enum Surface {
+    Keyboard,
+    Dashboard,
 }
 
 struct Runtime {
@@ -92,6 +108,7 @@ pub struct SteamVr {
     input: Input,
     applications: Applications,
     handle: u64,
+    dashboard: u64,
     toggle_set: u64,
     pointer_set: u64,
     toggle_action: u64,
@@ -99,14 +116,17 @@ pub struct SteamVr {
     click_action: u64,
     hands: [u64; 2],
     panel: Option<Matrix>,
+    world_shown: bool,
     width: f32,
     preferred_hand: usize,
+    holding_trigger: bool,
     armed: [bool; 2],
     quitting: bool,
 }
 
 impl SteamVr {
-    pub fn connect(directory: &Path) -> Result<Self> {
+    pub fn connect(directory: &Path, dashboard_size: [u32; 2]) -> Result<Self> {
+        let runtime = Runtime::connect()?;
         let (app_path, actions_path) =
             actions::write_manifests(directory).map_err(|error| error.to_string())?;
         let path_string = |path: &Path| {
@@ -118,7 +138,6 @@ impl SteamVr {
         };
         let app_path = path_string(&app_path)?;
         let actions_path = path_string(&actions_path)?;
-        let runtime = Runtime::connect()?;
         let system = System(runtime.table(abi::SYSTEM)?);
         let overlay = Overlay(runtime.table(abi::OVERLAY)?);
         let input = Input(runtime.table(abi::INPUT)?);
@@ -173,13 +192,14 @@ impl SteamVr {
             overlay.create(actions::APP_KEY.as_ptr(), c"ViME".as_ptr(), &mut handle),
             "VRキーボードを作成",
         )?;
-        Ok(Self {
+        let mut session = Self {
             _runtime: runtime,
             system,
             overlay,
             input,
             applications,
             handle,
+            dashboard: 0,
             toggle_set,
             pointer_set,
             toggle_action,
@@ -187,17 +207,90 @@ impl SteamVr {
             click_action,
             hands,
             panel: None,
+            world_shown: false,
             width: 1.08,
             preferred_hand: 1,
+            holding_trigger: false,
             armed: [false; 2],
             quitting: false,
-        })
+        };
+        session.configure_texture(handle)?;
+        session.create_dashboard(dashboard_size)?;
+        Ok(session)
     }
 
-    pub fn open_bindings(&self) -> Result<()> {
+    fn create_dashboard(&mut self, size: [u32; 2]) -> Result<()> {
+        let mut thumbnail = 0;
+        checked(
+            self.overlay.create_dashboard(
+                actions::DASHBOARD_KEY.as_ptr(),
+                c"ViME".as_ptr(),
+                &mut self.dashboard,
+                &mut thumbnail,
+            ),
+            "SteamVR ダッシュボードに ViME を追加",
+        )?;
+        self.configure_texture(self.dashboard)?;
+        checked(
+            self.overlay.set_width(self.dashboard, 1.9),
+            "ダッシュボードのパネル幅を設定",
+        )?;
+        checked(
+            self.overlay.input_method(self.dashboard, abi::INPUT_MOUSE),
+            "ダッシュボードのポインターを設定",
+        )?;
+        checked(
+            self.overlay
+                .mouse_scale(self.dashboard, &size.map(|axis| axis as f32)),
+            "ダッシュボードの座標を設定",
+        )?;
+
+        // The static icon is submitted once. Interactive panels use persistent GL textures.
+        let icon: Vec<_> = (0..64)
+            .flat_map(|y| {
+                (0..64).flat_map(move |x| {
+                    let case = (8..56).contains(&x) && (17..47).contains(&y);
+                    let keys = [22, 29].iter().any(|row| (*row..row + 4).contains(&y))
+                        && (14..50).contains(&x)
+                        && (x - 14) % 7 < 4;
+                    let space = (37..41).contains(&y) && (21..43).contains(&x);
+                    if keys || space {
+                        [191, 226, 255, 255]
+                    } else if case {
+                        [44, 65, 91, 255]
+                    } else {
+                        [0, 0, 0, 0]
+                    }
+                })
+            })
+            .collect();
+        if thumbnail != 0 {
+            self.overlay.set_raw(thumbnail, icon.as_ptr(), 64, 64, 4);
+        }
+        Ok(())
+    }
+
+    fn configure_texture(&self, handle: u64) -> Result<()> {
+        let bounds = TextureBounds {
+            u_min: 0.,
+            v_min: 1.,
+            u_max: 1.,
+            v_max: 0.,
+        };
+        checked(
+            self.overlay.texture_bounds(handle, &bounds),
+            "VR テクスチャの向きを設定",
+        )?;
+        checked(
+            self.overlay.flag(handle, abi::PREMULTIPLIED_ALPHA, true),
+            "VR テクスチャの透過を設定",
+        )
+    }
+
+    pub fn open_bindings(&self, desktop: bool) -> Result<()> {
         checked(
             self.input
-                .open_bindings(actions::APP_KEY.as_ptr(), 0, 0, true),
+                .open_bindings(actions::APP_KEY.as_ptr(), self.toggle_set, 0, desktop),
             "SteamVR バインド画面を開く",
         )
     }
@@ -223,9 +316,9 @@ impl SteamVr {
                 .set_transform(self.handle, abi::STANDING, &panel),
             "VRキーボードを配置",
         )?;
-        checked(self.overlay.show(self.handle), "VRキーボードを表示")?;
         self.panel = Some(panel);
         self.armed = [false; 2];
+        self.holding_trigger = false;
         Ok(())
     }
 
@@ -239,20 +332,38 @@ impl SteamVr {
     }
 
     pub fn hide(&mut self) -> Result<()> {
-        checked(self.overlay.hide(self.handle), "VRキーボードを閉じる")?;
+        if self.world_shown {
+            checked(self.overlay.hide(self.handle), "VRキーボードを閉じる")?;
+            self.world_shown = false;
+        }
         self.panel = None;
+        self.holding_trigger = false;
         Ok(())
     }
 
-    pub fn upload(&self, pixels: &[u8], width: u32, height: u32) -> Result<()> {
-        if pixels.len() != width as usize * height as usize * 4 {
-            return Err("VRキーボードの画像サイズが一致しません".into());
-        }
+    /// Submit while the graphics context owning this OpenGL texture is current.
+    pub fn present(&mut self, surface: Surface, name: std::num::NonZeroU32) -> Result<()> {
+        let handle = match surface {
+            Surface::Keyboard => self.handle,
+            Surface::Dashboard => self.dashboard,
+        };
+        let texture = Texture {
+            handle: name.get() as usize as *mut c_void,
+            kind: abi::TEXTURE_OPENGL,
+            color_space: abi::COLOR_GAMMA,
+        };
         checked(
-            self.overlay
-                .set_raw(self.handle, pixels.as_ptr(), width, height, 4),
-            "VRキーボードを描画",
-        )
+            self.overlay.set_texture(handle, &texture),
+            match surface {
+                Surface::Keyboard => "VRキーボードを描画",
+                Surface::Dashboard => "ダッシュボードを描画",
+            },
+        )?;
+        if matches!(surface, Surface::Keyboard) && self.visible() && !self.world_shown {
+            checked(self.overlay.show(handle), "VRキーボードを表示")?;
+            self.world_shown = true;
+        }
+        Ok(())
     }
 
     pub fn poll(&mut self, aspect: f32) -> Frame {
@@ -275,7 +386,33 @@ impl SteamVr {
         }
 
         let dashboard = self.overlay.dashboard_visible();
-        let pointing = self.visible() && !dashboard;
+        let dashboard_active = dashboard && self.overlay.dashboard_active(self.dashboard);
+        let mut dashboard_events = Vec::new();
+        for _ in 0..64 {
+            if !self
+                .overlay
+                .poll_event(self.dashboard, &mut event, size_of::<Event>() as u32)
+            {
+                break;
+            }
+            if dashboard_active {
+                let input = match event.kind {
+                    abi::MOUSE_MOVE => Some(DashboardEvent::Move(event.mouse().0)),
+                    abi::MOUSE_DOWN | abi::MOUSE_UP if event.mouse().1 == abi::MOUSE_LEFT => {
+                        Some(DashboardEvent::Button(event.kind == abi::MOUSE_DOWN))
+                    }
+                    abi::FOCUS_LEAVE | abi::OVERLAY_HIDDEN => Some(DashboardEvent::Leave),
+                    _ => None,
+                };
+                dashboard_events.extend(input);
+            }
+        }
+        let pointing = self.world_shown && !dashboard;
+        let mut frame = Frame {
+            dashboard_active,
+            dashboard_events,
+            ..Frame::default()
+        };
         let mut sets = [ActionSet::default(), ActionSet::default()];
         sets[0].set = self.toggle_set;
         sets[0].priority = 1;
@@ -288,7 +425,8 @@ impl SteamVr {
         ) != 0
         {
             self.armed = [false; 2];
-            return Frame::default();
+            self.holding_trigger = false;
+            return frame;
         }
 
         let toggle = !dashboard
@@ -300,7 +438,9 @@ impl SteamVr {
             let other = 1 - previous;
             let first = self.pointer(previous, &panel, aspect);
             let second = self.pointer(other, &panel, aspect);
-            let selected = if second.is_some_and(|p| p.down) && !first.is_some_and(|p| p.down) {
+            let selected = if self.holding_trigger {
+                first
+            } else if second.is_some_and(|p| p.down) && !first.is_some_and(|p| p.down) {
                 second
             } else {
                 first.or(second)
@@ -308,16 +448,16 @@ impl SteamVr {
             if let Some(pointer) = selected {
                 self.preferred_hand = pointer.hand;
             }
+            self.holding_trigger = selected.is_some_and(|pointer| pointer.down);
             selected
         } else {
             self.armed = [false; 2];
+            self.holding_trigger = false;
             None
         };
-        Frame {
-            toggle,
-            pointer,
-            quit: false,
-        }
+        frame.toggle = toggle;
+        frame.pointer = pointer;
+        frame
     }
 
     fn pointer(&mut self, hand: usize, panel: &Matrix, aspect: f32) -> Option<Pointer> {
@@ -364,6 +504,9 @@ impl SteamVr {
 impl Drop for SteamVr {
     fn drop(&mut self) {
         if !self.quitting {
+            if self.dashboard != 0 {
+                self.overlay.destroy(self.dashboard);
+            }
             self.overlay.destroy(self.handle);
         }
     }

@@ -1,7 +1,8 @@
 use crate::{
+    dashboard::{self, Command, Dashboard, Page},
     hotkeys::Hotkeys,
     keyboard::{self, Action, Keyboard},
-    overlay_surface::OverlaySurface,
+    overlay_surface::{OverlaySurface, pointer_events, position},
 };
 use eframe::egui::{
     self, Align, Button, Color32, FontData, FontDefinitions, FontFamily, Frame, Layout, Margin,
@@ -11,7 +12,7 @@ use std::{env, fs, path::PathBuf, sync::Arc, time::Duration};
 use vime::{
     output,
     settings::{Destination, Settings},
-    steamvr::{Pointer, SteamVr},
+    steamvr::{Pointer, SteamVr, Surface},
 };
 
 const BACKGROUND: Color32 = Color32::from_rgb(20, 26, 35);
@@ -44,12 +45,40 @@ struct App {
     draft: Settings,
     hotkeys: Option<Hotkeys>,
     keyboard: Keyboard,
-    surface: Result<OverlaySurface, String>,
+    surfaces: Result<Surfaces, String>,
     vr: Option<SteamVr>,
+    auto_connect: bool,
+    page: Page,
+    dashboard: Dashboard,
     pointer: Option<Pointer>,
+    world_pointer: Option<Pointer>,
+    last_world: Option<(u64, Destination, Option<Pointer>)>,
+    dashboard_revision: Option<u64>,
+    draw_errors: [Option<String>; 2],
     steamvr_message: String,
     settings_message: String,
     settings_error: bool,
+}
+
+struct Surfaces {
+    keyboard: OverlaySurface,
+    dashboard: OverlaySurface,
+}
+
+impl Surfaces {
+    fn new(gl: Arc<eframe::glow::Context>, fonts: FontDefinitions) -> Result<Self, String> {
+        let keyboard = OverlaySurface::new(gl.clone(), fonts.clone(), visuals(), keyboard::SIZE)?;
+        match OverlaySurface::new(gl, fonts, visuals(), dashboard::SIZE) {
+            Ok(dashboard) => Ok(Self {
+                keyboard,
+                dashboard,
+            }),
+            Err(error) => {
+                keyboard.destroy();
+                Err(error)
+            }
+        }
+    }
 }
 
 impl App {
@@ -57,11 +86,11 @@ impl App {
         let fonts = windows_fonts();
         creation.egui_ctx.set_fonts(fonts.clone());
         creation.egui_ctx.set_visuals(visuals());
-        let surface = creation
+        let surfaces = creation
             .gl
             .clone()
             .ok_or_else(|| "OpenGL を初期化できません".to_owned())
-            .and_then(|gl| OverlaySurface::new(gl, fonts));
+            .and_then(|gl| Surfaces::new(gl, fonts));
 
         let directory = Settings::directory()?;
         let (settings, mut settings_message) = match Settings::load(&directory) {
@@ -90,9 +119,16 @@ impl App {
             settings,
             hotkeys,
             keyboard: Keyboard::new(),
-            surface,
+            surfaces,
             vr: None,
+            auto_connect: true,
+            page: Page::default(),
+            dashboard: Dashboard::default(),
             pointer: None,
+            world_pointer: None,
+            last_world: None,
+            dashboard_revision: None,
+            draw_errors: [None, None],
             steamvr_message: String::new(),
             settings_error: !settings_message.is_empty(),
             settings_message,
@@ -127,13 +163,14 @@ impl App {
     }
 
     fn connect(&mut self) {
-        if let Err(error) = &self.surface {
+        if let Err(error) = &self.surfaces {
             self.steamvr_message = error.clone();
             return;
         }
-        match SteamVr::connect(&self.directory) {
+        match SteamVr::connect(&self.directory, dashboard::SIZE) {
             Ok(vr) => {
                 self.steamvr_message.clear();
+                self.dashboard.reset();
                 self.vr = Some(vr);
             }
             Err(error) => self.steamvr_message = error,
@@ -152,10 +189,38 @@ impl App {
             vr.hide()
         };
         self.steamvr_message = result.err().unwrap_or_default();
-        if let Ok(surface) = &mut self.surface {
-            surface.reset();
+        if let Ok(surfaces) = &mut self.surfaces {
+            surfaces.keyboard.reset();
         }
         self.pointer = None;
+        self.last_world = None;
+        self.draw_errors[0] = None;
+    }
+
+    fn disconnect(&mut self) {
+        self.vr = None;
+        self.pointer = None;
+        self.last_world = None;
+        self.dashboard.reset();
+        self.draw_errors = [None, None];
+        if let Ok(surfaces) = &mut self.surfaces {
+            surfaces.keyboard.reset();
+            surfaces.dashboard.reset();
+        }
+    }
+
+    fn save_draft(&mut self) {
+        match self.apply_settings() {
+            Ok(()) => {
+                self.settings_error = false;
+                self.settings_message = "設定を保存しました".into();
+            }
+            Err(error) => {
+                self.settings_error = true;
+                self.settings_message = error;
+            }
+        }
+        self.dashboard.redraw = true;
     }
 
     fn keyboard_action(&mut self, action: Action) {
@@ -191,22 +256,81 @@ impl App {
     }
 
     fn paint_overlay(&mut self) {
-        if let (Some(vr), Ok(surface)) = (&self.vr, &mut self.surface)
-            && vr.visible()
-            && let Some((pixels, action)) =
-                surface.render(&self.keyboard, self.settings.destination, self.pointer)
-        {
-            if let Err(error) = vr.upload(pixels, keyboard::SIZE[0], keyboard::SIZE[1]) {
-                self.toggle();
-                self.steamvr_message = error;
-            } else if let Some(action) = action {
-                self.keyboard_action(action);
+        let (Some(vr), Ok(surfaces)) = (&mut self.vr, &mut self.surfaces) else {
+            return;
+        };
+        let mut command = None;
+        if vr.visible() {
+            let pointer = self.pointer.map(|mut pointer| {
+                for (coordinate, size) in pointer.uv.iter_mut().zip(keyboard::SIZE) {
+                    *coordinate = (*coordinate * size as f32).round() / size as f32;
+                }
+                pointer
+            });
+            let frame = (self.keyboard.revision, self.settings.destination, pointer);
+            if self.last_world != Some(frame) {
+                let events = pointer_events(self.world_pointer, pointer);
+                self.world_pointer = pointer;
+                self.last_world = Some(frame);
+                command = surfaces
+                    .keyboard
+                    .render(events, |ui| {
+                        keyboard::show(
+                            ui,
+                            &self.keyboard,
+                            keyboard::SIZE[0] as f32,
+                            self.settings.destination,
+                            pointer.map(position),
+                            true,
+                        )
+                    })
+                    .map(Command::Keyboard);
             }
+            if let Some(result) = surfaces
+                .keyboard
+                .present(|texture| vr.present(Surface::Keyboard, texture))
+            {
+                self.draw_errors[0] = result.err();
+            }
+        }
+
+        let revision = Some(self.keyboard.revision);
+        if self.dashboard.redraw || (self.dashboard.active && self.dashboard_revision != revision) {
+            self.dashboard.redraw = false;
+            self.dashboard_revision = revision;
+            let events = self.dashboard.take_events();
+            let dashboard_command = surfaces.dashboard.render(events, |ui| {
+                self.dashboard.show(
+                    ui,
+                    &self.keyboard,
+                    &self.settings,
+                    &mut self.draft,
+                    &self.settings_message,
+                )
+            });
+            command = dashboard_command.or(command);
+        }
+        if let Some(result) = surfaces
+            .dashboard
+            .present(|texture| vr.present(Surface::Dashboard, texture))
+        {
+            self.draw_errors[1] = result.err();
+        }
+
+        match command {
+            Some(Command::Keyboard(action)) => self.keyboard_action(action),
+            Some(Command::OpenBindings) => {
+                self.settings_message = vr.open_bindings(false).err().unwrap_or_default();
+                self.dashboard.redraw = true;
+            }
+            Some(Command::SaveSettings) => self.save_draft(),
+            None => {}
         }
     }
 
     fn page(&mut self, ui: &mut Ui) {
         ui.set_max_width(ui.available_width().min(1080.));
+        ui.style_mut().spacing.interact_size.y = 30.;
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label(RichText::new("ViME").size(35.).strong().color(INK));
@@ -219,9 +343,15 @@ impl App {
         });
         ui.add_space(17.);
         self.steamvr_panel(ui);
-        ui.add_space(18.);
-        self.settings_panel(ui);
-        ui.add_space(17.);
+        ui.add_space(14.);
+        Page::tabs(&mut self.page, ui);
+        ui.add_space(14.);
+        if self.page == Page::Settings {
+            let before = self.draft.clone();
+            self.settings_panel(ui);
+            self.dashboard.redraw |= self.draft != before;
+            return;
+        }
         ui.horizontal(|ui| {
             ui.label(RichText::new("キーボードプレビュー").size(18.).strong());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -245,6 +375,10 @@ impl App {
             self.keyboard_action(action);
             ui.ctx().request_repaint();
         }
+        ui.label(
+            RichText::new("VR では左スティック押し込みで開閉し、トリガーでキーを選びます。")
+                .color(SECONDARY),
+        );
     }
 
     fn steamvr_panel(&mut self, ui: &mut Ui) {
@@ -267,13 +401,12 @@ impl App {
                     if let Some(vr) = &self.vr {
                         let visible = vr.visible();
                         if ui.button("切断").clicked() {
-                            self.vr = None;
-                            self.pointer = None;
+                            self.disconnect();
                             self.steamvr_message.clear();
                             return;
                         }
-                        if ui.button("コントローラーバインドを編集").clicked() {
-                            self.steamvr_message = vr.open_bindings().err().unwrap_or_default();
+                        if ui.button("VR の割り当てを編集").clicked() {
+                            self.steamvr_message = vr.open_bindings(true).err().unwrap_or_default();
                         }
                         if ui
                             .add(Button::new(if visible {
@@ -293,6 +426,9 @@ impl App {
             if !self.steamvr_message.is_empty() {
                 ui.label(RichText::new(&self.steamvr_message).color(ERROR));
             }
+            for error in self.draw_errors.iter().flatten() {
+                ui.label(RichText::new(error).color(ERROR));
+            }
         });
     }
 
@@ -305,18 +441,7 @@ impl App {
                     unreachable!("two settings columns")
                 };
                 destination.label(RichText::new("送信先").color(SECONDARY));
-                destination.horizontal_wrapped(|ui| {
-                    ui.selectable_value(
-                        &mut self.draft.destination,
-                        Destination::Osc,
-                        Destination::Osc.label(),
-                    );
-                    ui.selectable_value(
-                        &mut self.draft.destination,
-                        Destination::SteamVrInput,
-                        Destination::SteamVrInput.label(),
-                    );
-                });
+                dashboard::destination_options(destination, &mut self.draft.destination);
                 if self.draft.destination == Destination::Osc {
                     destination.horizontal_wrapped(|ui| {
                         ui.label("UDP ポート");
@@ -363,16 +488,7 @@ impl App {
                         .add_enabled(self.draft != self.settings, primary("設定を保存"))
                         .clicked()
                     {
-                        match self.apply_settings() {
-                            Ok(()) => {
-                                self.settings_error = false;
-                                self.settings_message = "設定を保存しました".into();
-                            }
-                            Err(error) => {
-                                self.settings_error = true;
-                                self.settings_message = error;
-                            }
-                        }
+                        self.save_draft();
                     }
                 });
             });
@@ -382,6 +498,9 @@ impl App {
 
 impl eframe::App for App {
     fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        if std::mem::take(&mut self.auto_connect) {
+            self.connect();
+        }
         if self.hotkeys.as_ref().is_some_and(Hotkeys::pressed) {
             self.toggle();
         }
@@ -389,16 +508,20 @@ impl eframe::App for App {
             let frame = vr.poll(keyboard::ASPECT);
             self.pointer = frame.pointer;
             if frame.quit {
-                self.vr = None;
-                self.pointer = None;
+                self.disconnect();
                 self.steamvr_message = "SteamVR との接続が終了しました".into();
-            } else if frame.toggle {
-                self.toggle();
+            } else {
+                self.dashboard
+                    .feed(frame.dashboard_active, frame.dashboard_events);
+                if frame.toggle {
+                    self.toggle();
+                }
             }
         }
         if let Some(vr) = &self.vr {
-            let visible = vr.visible();
-            if visible {
+            let visible = vr.visible() || self.dashboard.active;
+            let pending_dashboard = self.dashboard.redraw || self.draw_errors[1].is_some();
+            if visible || pending_dashboard {
                 context.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
             }
             context.request_repaint_after(Duration::from_millis(if visible { 16 } else { 33 }));
@@ -419,10 +542,12 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        self.disconnect();
         if gl.is_some()
-            && let Ok(surface) = std::mem::replace(&mut self.surface, Err(String::new()))
+            && let Ok(surfaces) = std::mem::replace(&mut self.surfaces, Err(String::new()))
         {
-            surface.destroy();
+            surfaces.keyboard.destroy();
+            surfaces.dashboard.destroy();
         }
     }
 }

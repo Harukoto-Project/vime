@@ -1,12 +1,16 @@
-use crate::keyboard::{self, Action, Keyboard, SIZE};
+use crate::keyboard::SIZE as KEYBOARD_SIZE;
 use eframe::{
-    egui::{self, Event, FontDefinitions, Pos2, RawInput, Rect, Vec2},
+    egui::{self, Event, FontDefinitions, Pos2, RawInput, Rect, Ui, Vec2, Visuals},
     glow::{self, HasContext},
 };
-use std::sync::Arc;
-use vime::{settings::Destination, steamvr::Pointer};
+use std::{
+    num::NonZeroU32,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use vime::steamvr::Pointer;
 
-type Result<T> = std::result::Result<T, String>;
+const RETRY_DELAY: Duration = Duration::from_millis(250);
 
 pub struct OverlaySurface {
     context: egui::Context,
@@ -14,16 +18,21 @@ pub struct OverlaySurface {
     gl: Arc<glow::Context>,
     framebuffer: glow::Framebuffer,
     texture: glow::Texture,
-    rgba: Vec<u8>,
-    last_pointer: Option<Pointer>,
-    last_frame: Option<(u64, Destination)>,
+    size: [u32; 2],
+    pending: bool,
+    retry_after: Option<Instant>,
 }
 
 impl OverlaySurface {
-    pub fn new(gl: Arc<glow::Context>, fonts: FontDefinitions) -> Result<Self> {
+    pub fn new(
+        gl: Arc<glow::Context>,
+        fonts: FontDefinitions,
+        visuals: Visuals,
+        size: [u32; 2],
+    ) -> Result<Self, String> {
         let mut painter = egui_glow::Painter::new(gl.clone(), "", None, false)
             .map_err(|error| error.to_string())?;
-        let (framebuffer, texture) = match make_target(&gl) {
+        let (framebuffer, texture) = match make_target(&gl, size) {
             Ok(target) => target,
             Err(error) => {
                 painter.destroy();
@@ -32,6 +41,7 @@ impl OverlaySurface {
         };
         let context = egui::Context::default();
         context.set_fonts(fonts);
+        context.set_visuals(visuals);
         context.options_mut(|options| options.max_passes = std::num::NonZeroUsize::MIN);
 
         Ok(Self {
@@ -40,84 +50,83 @@ impl OverlaySurface {
             gl,
             framebuffer,
             texture,
-            rgba: vec![0; (SIZE[0] * SIZE[1] * 4) as usize],
-            last_pointer: None,
-            last_frame: None,
+            size,
+            pending: false,
+            retry_after: None,
         })
     }
 
-    pub fn reset(&mut self) {
-        self.last_frame = None;
-    }
-
-    pub fn render(
-        &mut self,
-        keyboard: &Keyboard,
-        destination: Destination,
-        pointer: Option<Pointer>,
-    ) -> Option<(&[u8], Option<Action>)> {
-        let pointer = pointer.map(|mut pointer| {
-            for (coordinate, size) in pointer.uv.iter_mut().zip(SIZE) {
-                *coordinate = (*coordinate * size as f32).round() / size as f32;
-            }
-            pointer
-        });
-        let frame = (keyboard.revision, destination);
-        if self.last_frame == Some(frame) && pointer == self.last_pointer {
-            return None;
-        }
-
-        let events = pointer_events(self.last_pointer, pointer);
-        self.last_pointer = pointer;
-        self.last_frame = Some(frame);
-        let screen_rect =
-            Rect::from_min_size(Pos2::ZERO, Vec2::new(SIZE[0] as f32, SIZE[1] as f32));
+    pub fn render<T>(&mut self, events: Vec<Event>, mut draw: impl FnMut(&mut Ui) -> T) -> T {
+        let screen_rect = Rect::from_min_size(
+            Pos2::ZERO,
+            Vec2::new(self.size[0] as f32, self.size[1] as f32),
+        );
         let input = RawInput {
             screen_rect: Some(screen_rect),
             events,
             ..RawInput::default()
         };
-        let mut action = None;
-        let mut output = self.context.run_ui(input, |ui| {
-            action = keyboard::show(
-                ui,
-                keyboard,
-                SIZE[0] as f32,
-                destination,
-                pointer.map(position),
-                true,
-            );
-        });
-
+        let mut result = None;
+        let mut output = self.context.run_ui(input, |ui| result = Some(draw(ui)));
         let shapes = self
             .context
             .tessellate(output.shapes, output.pixels_per_point);
-        // Read the private target while eframe's GL context is current and restore
-        // the default drawing target before eframe paints the Windows UI.
+
+        // The texture stays on the GPU and belongs to the current eframe GL context.
         unsafe {
-            let previous = self.gl.get_parameter_framebuffer(glow::FRAMEBUFFER_BINDING);
+            let draw = self
+                .gl
+                .get_parameter_framebuffer(glow::DRAW_FRAMEBUFFER_BINDING);
+            let read = self
+                .gl
+                .get_parameter_framebuffer(glow::READ_FRAMEBUFFER_BINDING);
             self.gl
                 .bind_framebuffer(glow::FRAMEBUFFER, Some(self.framebuffer));
-            self.painter.clear(SIZE, [0.0; 4]);
+            self.painter.clear(self.size, [0.0; 4]);
             self.painter.paint_and_update_textures(
-                SIZE,
+                self.size,
                 output.pixels_per_point,
                 &shapes,
                 &mut output.textures_delta,
             );
-            self.gl.read_pixels(
-                0,
-                0,
-                SIZE[0] as i32,
-                SIZE[1] as i32,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(Some(&mut self.rgba)),
-            );
-            self.gl.bind_framebuffer(glow::FRAMEBUFFER, previous);
+            self.gl.flush();
+            self.gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, draw);
+            self.gl.bind_framebuffer(glow::READ_FRAMEBUFFER, read);
         }
-        flip_and_unpremultiply(&mut self.rgba);
-        Some((&self.rgba, action))
+        self.pending = true;
+        result.expect("egui invokes the overlay draw callback")
+    }
+
+    pub fn reset(&mut self) {
+        self.pending = false;
+        self.retry_after = None;
+    }
+
+    pub fn present(
+        &mut self,
+        submit: impl FnOnce(NonZeroU32) -> Result<(), String>,
+    ) -> Option<Result<(), String>> {
+        let now = Instant::now();
+        if !self.pending || self.retry_after.is_some_and(|retry| retry > now) {
+            return None;
+        }
+        let result = unsafe {
+            let draw = self
+                .gl
+                .get_parameter_framebuffer(glow::DRAW_FRAMEBUFFER_BINDING);
+            let read = self
+                .gl
+                .get_parameter_framebuffer(glow::READ_FRAMEBUFFER_BINDING);
+            let result = submit(self.texture.0);
+            self.gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, draw);
+            self.gl.bind_framebuffer(glow::READ_FRAMEBUFFER, read);
+            result
+        };
+        match &result {
+            Ok(()) => self.reset(),
+            Err(_) => self.retry_after = Some(now + RETRY_DELAY),
+        }
+        Some(result)
     }
 
     pub fn destroy(mut self) {
@@ -129,7 +138,10 @@ impl OverlaySurface {
     }
 }
 
-fn make_target(gl: &glow::Context) -> Result<(glow::Framebuffer, glow::Texture)> {
+fn make_target(
+    gl: &glow::Context,
+    size: [u32; 2],
+) -> Result<(glow::Framebuffer, glow::Texture), String> {
     unsafe {
         let framebuffer = gl.create_framebuffer()?;
         let texture = match gl.create_texture() {
@@ -139,8 +151,8 @@ fn make_target(gl: &glow::Context) -> Result<(glow::Framebuffer, glow::Texture)>
                 return Err(error);
             }
         };
-
-        let previous = gl.get_parameter_framebuffer(glow::FRAMEBUFFER_BINDING);
+        let draw = gl.get_parameter_framebuffer(glow::DRAW_FRAMEBUFFER_BINDING);
+        let read = gl.get_parameter_framebuffer(glow::READ_FRAMEBUFFER_BINDING);
         gl.bind_texture(glow::TEXTURE_2D, Some(texture));
         gl.tex_parameter_i32(
             glow::TEXTURE_2D,
@@ -156,8 +168,8 @@ fn make_target(gl: &glow::Context) -> Result<(glow::Framebuffer, glow::Texture)>
             glow::TEXTURE_2D,
             0,
             glow::RGBA8 as i32,
-            SIZE[0] as i32,
-            SIZE[1] as i32,
+            size[0] as i32,
+            size[1] as i32,
             0,
             glow::RGBA,
             glow::UNSIGNED_BYTE,
@@ -172,67 +184,56 @@ fn make_target(gl: &glow::Context) -> Result<(glow::Framebuffer, glow::Texture)>
             0,
         );
         let complete = gl.check_framebuffer_status(glow::FRAMEBUFFER) == glow::FRAMEBUFFER_COMPLETE;
-        gl.bind_framebuffer(glow::FRAMEBUFFER, previous);
+        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, draw);
+        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, read);
         gl.bind_texture(glow::TEXTURE_2D, None);
         if !complete {
             gl.delete_framebuffer(framebuffer);
             gl.delete_texture(texture);
-            return Err("VRキーボードの描画先を作成できません".into());
+            return Err("VR の描画先を作成できません".into());
         }
         Ok((framebuffer, texture))
     }
 }
 
-fn position(pointer: Pointer) -> Pos2 {
+pub fn position(pointer: Pointer) -> Pos2 {
     Pos2::new(
-        pointer.uv[0] * SIZE[0] as f32,
-        pointer.uv[1] * SIZE[1] as f32,
+        pointer.uv[0] * KEYBOARD_SIZE[0] as f32,
+        pointer.uv[1] * KEYBOARD_SIZE[1] as f32,
     )
 }
 
-fn pointer_events(previous: Option<Pointer>, current: Option<Pointer>) -> Vec<Event> {
+pub fn pointer_events(previous: Option<Pointer>, current: Option<Pointer>) -> Vec<Event> {
     let mut events = Vec::new();
-    let button = |pos, pressed| Event::PointerButton {
-        pos,
-        button: egui::PointerButton::Primary,
-        pressed,
-        modifiers: egui::Modifiers::NONE,
-    };
     let same_hand = matches!((previous, current), (Some(previous), Some(current)) if previous.hand == current.hand);
-    if previous.is_some_and(|previous| previous.down) && !same_hand {
-        let outside = Pos2::new(-32., -32.);
-        events.push(Event::PointerMoved(outside));
-        events.push(button(outside, false));
+    if !same_hand {
+        cancel_pointer(&mut events, previous.is_some_and(|previous| previous.down));
     }
     if let Some(current) = current {
         let pos = position(current);
         events.push(Event::PointerMoved(pos));
         let was_down = same_hand && previous.is_some_and(|previous| previous.down);
         if current.down != was_down {
-            events.push(button(pos, current.down));
+            events.push(pointer_button(pos, current.down));
         }
-    } else {
-        events.push(Event::PointerGone);
     }
     events
 }
 
-fn flip_and_unpremultiply(pixels: &mut [u8]) {
-    let stride = SIZE[0] as usize * 4;
-    let (top, bottom) = pixels.split_at_mut(pixels.len() / 2);
-    for (bottom, top) in bottom
-        .chunks_exact_mut(stride)
-        .rev()
-        .zip(top.chunks_exact_mut(stride))
-    {
-        top.swap_with_slice(bottom);
+pub fn pointer_button(pos: Pos2, pressed: bool) -> Event {
+    Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
     }
-    for pixel in pixels.as_chunks_mut::<4>().0 {
-        let alpha = u32::from(pixel[3]);
-        if alpha != 0 && alpha != 255 {
-            for channel in &mut pixel[..3] {
-                *channel = ((u32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
-            }
-        }
+}
+
+pub fn cancel_pointer(events: &mut Vec<Event>, down: bool) {
+    if down {
+        let outside = Pos2::new(-32., -32.);
+        events.push(Event::PointerMoved(outside));
+        events.push(pointer_button(outside, false));
     }
+    events.push(Event::PointerGone);
 }

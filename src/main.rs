@@ -1,6 +1,8 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 #[cfg(all(windows, target_arch = "x86_64"))]
+mod dashboard;
+#[cfg(all(windows, target_arch = "x86_64"))]
 mod desktop;
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod hotkeys;
