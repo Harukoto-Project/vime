@@ -171,12 +171,12 @@ impl Keyboard {
         }
     }
 
-    pub fn typo_suggestion(&self) -> Option<&str> {
-        self.typo
-            .as_ref()?
-            .suggestion
-            .as_ref()
-            .map(|suggestion| suggestion.word.as_str())
+    pub fn typo_suggestions(&self) -> impl Iterator<Item = &str> {
+        self.typo.iter().flat_map(|typo| {
+            typo.suggestions
+                .iter()
+                .map(|suggestion| suggestion.word.as_str())
+        })
     }
 
     /// Picks up a misconversion table that was just downloaded or removed.
@@ -249,7 +249,8 @@ impl Keyboard {
         if self.composer.converting() {
             view::CONVERSION_PAGE_SIZE
         } else {
-            view::CANDIDATE_PAGE_SIZE - usize::from(self.typo_suggestion().is_some())
+            let corrections = self.typo_suggestions().count();
+            view::CANDIDATE_PAGE_SIZE - corrections - usize::from(corrections != 0)
         }
     }
 
@@ -320,8 +321,10 @@ impl Keyboard {
             Action::Candidate(value) => self.composer.select(&value),
             Action::CorrectTypo(value) => {
                 if let Some(typo) = &mut self.typo
-                    && let Some(suggestion) = &typo.suggestion
-                    && suggestion.word == value
+                    && let Some(suggestion) = typo
+                        .suggestions
+                        .iter()
+                        .find(|suggestion| suggestion.word == value)
                 {
                     self.composer.replace_text(suggestion.range.clone(), &value);
                     typo.reset();
@@ -355,11 +358,14 @@ impl Keyboard {
         if let Some(snapshot) = snapshot
             && let Some(typo) = &mut self.typo
         {
-            if was_converting || self.composer.converting() {
+            if self.composer.converting() {
                 typo.reset();
             } else if !clearing {
                 let after = Snapshot::of(&self.composer);
                 if character || snapshot != after {
+                    if !typo.suggestions.is_empty() {
+                        self.candidate_page = 0;
+                    }
                     typo.changed(deleting.then_some(snapshot), typing, after);
                 }
             }

@@ -223,8 +223,38 @@ pub struct TypoSettings {
     pub url: String,
     pub model: String,
     pub calibration: BTreeMap<String, Profile>,
+    pub japanese: JapaneseTypoSettings,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub protected_api_keys: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub struct JapaneseTypoSettings {
+    pub enabled: bool,
+    pub context_chars: usize,
+    pub probability_threshold: f32,
+    pub candidates: usize,
+    pub max_positions: usize,
+}
+
+impl JapaneseTypoSettings {
+    pub const CONTEXT_RANGE: std::ops::RangeInclusive<usize> = 30..=50;
+    pub const THRESHOLD_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+    pub const CANDIDATE_RANGE: std::ops::RangeInclusive<usize> = 1..=5;
+    pub const POSITION_RANGE: std::ops::RangeInclusive<usize> = 1..=3;
+}
+
+impl Default for JapaneseTypoSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            context_chars: 40,
+            probability_threshold: 0.01,
+            candidates: 5,
+            max_positions: 2,
+        }
+    }
 }
 
 impl TypoSettings {
@@ -359,6 +389,17 @@ impl Settings {
     }
 
     fn validate(&self) -> io::Result<()> {
+        let japanese = &self.typo.japanese;
+        if !JapaneseTypoSettings::CONTEXT_RANGE.contains(&japanese.context_chars)
+            || !JapaneseTypoSettings::THRESHOLD_RANGE.contains(&japanese.probability_threshold)
+            || !JapaneseTypoSettings::CANDIDATE_RANGE.contains(&japanese.candidates)
+            || !JapaneseTypoSettings::POSITION_RANGE.contains(&japanese.max_positions)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid typo.japanese settings (context_chars: 30–50, probability_threshold: 0–1, candidates: 1–5, max_positions: 1–3)",
+            ));
+        }
         if self.osc_port == 0 || !(0.65..=1.65).contains(&self.overlay_width) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,

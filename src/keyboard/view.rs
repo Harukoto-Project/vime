@@ -408,8 +408,8 @@ impl Board<'_> {
 
     fn candidates(&mut self, keyboard: &Keyboard) {
         let values = &keyboard.candidates;
-        let correction = keyboard.typo_suggestion();
-        if values.is_empty() && correction.is_none() {
+        let mut corrections = keyboard.typo_suggestions().peekable();
+        if values.is_empty() && corrections.peek().is_none() {
             let hint = match keyboard.composer.language() {
                 Language::Japanese if keyboard.direct_input() => {
                     tr("半角英数字 · 半角/全角で日本語入力に切り替え")
@@ -431,10 +431,20 @@ impl Board<'_> {
             return;
         }
         let mut x = 22.;
-        if let Some(word) = correction {
+        if corrections.peek().is_some() {
+            self.label(
+                self.box_at(x, 141., 103., 36.),
+                Align2::LEFT_CENTER,
+                tr("修正候補"),
+                15.,
+                SECONDARY,
+            );
+            x += 110.;
+        }
+        for word in corrections {
             self.button(
                 self.box_at(x, 141., 103., 36.),
-                &format!("✓ {word}"),
+                word,
                 17.,
                 Face::Selected,
                 Action::CorrectTypo(word.to_owned()),

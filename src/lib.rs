@@ -8,6 +8,10 @@ mod download;
 pub mod i18n;
 pub mod ime;
 #[cfg(all(windows, target_arch = "x86_64"))]
+pub mod japanese_typo;
+#[cfg(all(windows, target_arch = "x86_64"))]
+mod job_process;
+#[cfg(all(windows, target_arch = "x86_64"))]
 pub mod local_d1;
 #[cfg(all(windows, target_arch = "x86_64"))]
 pub mod misconversions;

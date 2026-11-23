@@ -167,3 +167,24 @@ v{0} をダウンロード中…	Downloading v{0}…	v{0} 다운로드 중…
 アップデートを適用できませんでした	Could not apply the update	업데이트를 적용하지 못했습니다
 更新ファイルを展開できませんでした	Could not extract the update files	업데이트 파일의 압축을 풀지 못했습니다
 Windows x64 用の更新ファイルが見つかりません	The Windows x64 update files are missing	Windows x64 업데이트 파일을 찾을 수 없습니다
+修正候補	Corrections	수정 후보
+日本語の修正候補を表示する	Show Japanese correction suggestions	일본어 수정 후보 표시
+DistilBERT FP16 のモデルファイルを検出しました（DirectML）	DistilBERT FP16 model files found (DirectML)	DistilBERT FP16 모델 파일을 찾았습니다(DirectML)
+日本語モデルのダウンロードには Windows x64 版の Python 3.12 が必要です	Downloading the Japanese model requires Python 3.12 for Windows x64.	일본어 모델을 다운로드하려면 Windows x64용 Python 3.12가 필요합니다.
+Windows x64 版の Python 3.12 があれば、日本語モデルも同時に準備します	The Japanese model is also set up if Python 3.12 for Windows x64 is installed.	Windows x64용 Python 3.12가 설치되어 있으면 일본어 모델도 함께 준비합니다.
+Windows x64 版の Python 3.12 をインストールしてください	Install Python 3.12 for Windows x64.	Windows x64용 Python 3.12를 설치하세요.
+Python 3.12 を確認しています	Checking for Python 3.12	Python 3.12 확인 중
+日本語モデルの実行環境を準備しています	Setting up the Japanese model runtime	일본어 모델 실행 환경 준비 중
+日本語モデルをダウンロードして FP16 に変換しています	Downloading and converting the Japanese model to FP16	일본어 모델 다운로드 및 FP16 변환 중
+日本語モデルの準備を中止	Cancel Japanese model setup	일본어 모델 설정 취소
+日本語モデルを準備できませんでした ({0})	Could not set up the Japanese model ({0})	일본어 모델을 준비할 수 없습니다 ({0})
+日本語モデルをダウンロード	Download Japanese model	일본어 모델 다운로드
+d1-2B と日本語モデルをダウンロード	Download d1-2B and the Japanese model	d1-2B와 일본어 모델 다운로드
+日本語モデルのセットアップ手順	Japanese model setup	일본어 모델 설정 방법
+Windows x64 の Python 3.12 を用意し、ViME のソースフォルダーで次のコマンドを PowerShell で実行してください。	Install Python 3.12 for Windows x64 and run these commands in PowerShell from the ViME source folder.	Windows x64용 Python 3.12를 설치한 뒤 ViME 소스 폴더에서 다음 명령을 PowerShell로 실행하세요.
+セットアップコマンドをコピー	Copy setup commands	설정 명령 복사
+日本語の修正候補の詳細設定	Japanese correction options	일본어 수정 후보 세부 설정
+誤字検出の確率しきい値	Typo detection probability threshold	오타 감지 확률 임계값
+修正候補の最大件数	Maximum suggestions	최대 수정 후보 수
+カーソルの左右それぞれの文字数	Characters on each side of the cursor	커서 양쪽 각각의 문자 수
+一度に判定する誤字位置の最大数	Maximum typo positions per check	한 번에 검사할 최대 오타 위치 수

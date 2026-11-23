@@ -28,6 +28,8 @@ use vime::{
 
 use super::spellcheck::Spellcheck;
 
+mod contextual;
+
 const IDLE: Duration = Duration::from_millis(650);
 const RETYPE_IDLE: Duration = Duration::from_millis(1200);
 const EDIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -277,9 +279,23 @@ impl Request {
         self.generation == first.generation
             && self.revision == first.revision
             && matches!(self.query, Query::CheckEdit(..) | Query::Suggest(_))
+            && self.contextual_snapshot().is_none()
+    }
+
+    fn contextual_snapshot(&self) -> Option<&Snapshot> {
+        if let Query::Suggest(snapshot) = &self.query
+            && snapshot.language == Language::Japanese
+            && self.settings.provider == TypoProvider::D1Local
+            && self.settings.japanese.enabled
+        {
+            Some(snapshot)
+        } else {
+            None
+        }
     }
 
     fn reply(self, result: io::Result<Outcome>) -> Reply {
+        let suggestion = matches!(self.query, Query::Suggest(_));
         let retry = if result
             .as_ref()
             .is_err_and(|error| error.kind() == io::ErrorKind::Interrupted)
@@ -294,6 +310,7 @@ impl Request {
             revision: self.revision,
             result,
             retry,
+            suggestion,
         }
     }
 }
@@ -308,6 +325,7 @@ struct Reply {
     revision: u64,
     result: io::Result<Outcome>,
     retry: Option<(Pair, String)>,
+    suggestion: bool,
 }
 
 pub struct CalibrationJob {
@@ -335,7 +353,7 @@ impl Drop for CalibrationJob {
 
 enum Outcome {
     Skipped,
-    Evaluated(Option<Suggestion>),
+    Evaluated(Vec<Suggestion>),
     Report(Pair),
 }
 
@@ -363,8 +381,9 @@ pub struct Typo {
     reports: Option<SyncSender<(u64, Pair)>>,
     pending_edits: VecDeque<(Pair, String)>,
     pending_suggestion: Option<Snapshot>,
+    active_suggestion: Option<(u64, u64)>,
     due: Option<Instant>,
-    pub suggestion: Option<Suggestion>,
+    pub suggestions: Vec<Suggestion>,
     pub error: Option<io::Error>,
     requests: SyncSender<Request>,
     replies: Receiver<Reply>,
@@ -427,6 +446,12 @@ impl Typo {
                     let revision = request.revision;
                     let stale = || generation != current.load(Relaxed) || measuring.load(Relaxed);
                     if matches!(request.query, Query::WarmLocal) {
+                        if request.settings.japanese.enabled
+                            && matches!(worker.detector, Ok(None))
+                            && !stale()
+                        {
+                            worker.detector = contextual::Detector::start(&worker.directory);
+                        }
                         let result = worker
                             .local
                             .prepare(
@@ -436,8 +461,29 @@ impl Typo {
                                 Instant::now() + Duration::from_secs(45),
                                 stale,
                             )
-                            .map(|()| Outcome::Evaluated(None));
+                            .map(|()| Outcome::Evaluated(Vec::new()));
                         if outgoing.send(request.reply(result)).is_err() {
+                            break;
+                        }
+                    } else if let Some(snapshot) = request.contextual_snapshot()
+                        && !matches!(worker.detector, Ok(None))
+                    {
+                        let cancelled = || stale() || revision != active_revision.load(Relaxed);
+                        let outcome = if cancelled() {
+                            Err(io::ErrorKind::Interrupted.into())
+                        } else {
+                            worker
+                                .contextual(
+                                    snapshot,
+                                    &request.settings,
+                                    &active_device,
+                                    cancelled,
+                                    contextual::BUDGET,
+                                    &mut contextual::Timings::default(),
+                                )
+                                .map(Outcome::Evaluated)
+                        };
+                        if outgoing.send(request.reply(outcome)).is_err() {
                             break;
                         }
                     } else {
@@ -476,8 +522,9 @@ impl Typo {
             reports,
             pending_edits: VecDeque::new(),
             pending_suggestion: None,
+            active_suggestion: None,
             due: None,
-            suggestion: None,
+            suggestions: Vec::new(),
             error: None,
             requests,
             replies,
@@ -562,7 +609,7 @@ impl Typo {
         self.revision.fetch_add(1, Relaxed);
         self.due = None;
         self.pending_suggestion = None;
-        self.suggestion = None;
+        self.suggestions.clear();
     }
 
     pub fn changed(&mut self, deleted: Option<Snapshot>, inserted: bool, snapshot: Snapshot) {
@@ -597,12 +644,20 @@ impl Typo {
     }
 
     fn dispatch_suggestion(&mut self) {
-        if !self.calibrating.load(Relaxed)
-            && let Some(snapshot) = self.pending_suggestion.take()
-            && let Err(TrySendError::Full(Query::Suggest(snapshot))) =
-                self.send(Query::Suggest(snapshot))
-        {
-            self.pending_suggestion = Some(snapshot);
+        if self.calibrating.load(Relaxed) || self.active_suggestion.is_some() {
+            return;
+        }
+        if let Some(snapshot) = self.pending_suggestion.take() {
+            match self.send(Query::Suggest(snapshot)) {
+                Ok(()) => {
+                    self.active_suggestion =
+                        Some((self.generation.load(Relaxed), self.revision.load(Relaxed)));
+                }
+                Err(TrySendError::Full(Query::Suggest(snapshot))) => {
+                    self.pending_suggestion = Some(snapshot);
+                }
+                Err(_) => {}
+            }
         }
     }
 
@@ -681,7 +736,14 @@ impl Typo {
         }
         let mut changed = false;
         while let Ok(reply) = self.replies.try_recv() {
-            if reply.generation != self.generation.load(Relaxed) {
+            if reply.suggestion
+                && self.active_suggestion == Some((reply.generation, reply.revision))
+            {
+                self.active_suggestion = None;
+            }
+            if reply.generation != self.generation.load(Relaxed)
+                || (reply.suggestion && reply.revision != self.revision.load(Relaxed))
+            {
                 continue;
             }
             if let Some((pair, nearby)) = reply.retry {
@@ -697,11 +759,11 @@ impl Typo {
                         let _ = reports.try_send((reply.generation, pair));
                     }
                 }
-                Ok(Outcome::Evaluated(suggestion)) => {
+                Ok(Outcome::Evaluated(suggestions)) => {
                     self.error = None;
-                    if reply.revision == self.revision.load(Relaxed) && suggestion.is_some() {
-                        self.suggestion = suggestion;
-                        changed = true;
+                    if reply.suggestion {
+                        changed |= !suggestions.is_empty() || !self.suggestions.is_empty();
+                        self.suggestions = suggestions;
                     }
                 }
                 Err(error) if error.kind() != io::ErrorKind::Interrupted => {
@@ -741,11 +803,13 @@ struct Worker {
     last_send: Mutex<HashMap<String, Instant>>,
     spellcheck: Option<Spellcheck>,
     local: LocalD1,
+    detector: io::Result<Option<contextual::Detector>>,
 }
 
 impl Worker {
     fn new(directory: PathBuf) -> Self {
         Self {
+            detector: contextual::Detector::start(&directory),
             misconversions: Table::load(&directory),
             directory: directory.clone(),
             client: None,
@@ -850,17 +914,21 @@ impl Worker {
                 .and_then(|id| id.strip_prefix("fix_"))
                 .and_then(|index| index.parse::<usize>().ok())
                 .and_then(|index| alternatives.get(index));
-            return Ok(Outcome::Evaluated(word.map(|word| Suggestion {
-                word: word.clone(),
-                range,
-            })));
+            return Ok(Outcome::Evaluated(
+                word.into_iter()
+                    .map(|word| Suggestion {
+                        word: word.clone(),
+                        range: range.clone(),
+                    })
+                    .collect(),
+            ));
         }
         if choice.as_deref() == Some("accept")
             && let Query::CheckEdit(pair, _) = &request.query
         {
             return Ok(Outcome::Report(pair.clone()));
         }
-        Ok(Outcome::Evaluated(None))
+        Ok(Outcome::Evaluated(Vec::new()))
     }
     fn suggest(&self, settings: &TypoSettings, snapshot: &Snapshot) -> Option<Decision> {
         let japanese = snapshot.japanese_typo().or_else(|| {
@@ -1101,6 +1169,36 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn keeps_only_the_latest_snapshot_while_a_suggestion_is_running() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut typo = Typo::start(directory.path().to_owned(), Context::default());
+        let (requests, incoming) = sync_channel(8);
+        let (outgoing, replies) = channel();
+        typo.requests = requests;
+        typo.replies = replies;
+        let mut composer = Composer::default();
+        for text in ["最初", "途中", "最新"] {
+            composer.clear();
+            composer.insert(text);
+            typo.changed(None, true, Snapshot::of(&composer));
+        }
+        let first = incoming.try_recv().unwrap();
+        assert!(matches!(&first.query, Query::Suggest(snapshot) if snapshot.text == "最初"));
+        assert!(matches!(incoming.try_recv(), Err(TryRecvError::Empty)));
+        outgoing
+            .send(first.reply(Ok(Outcome::Evaluated(vec![Suggestion {
+                word: "古い".into(),
+                range: 0..6,
+            }]))))
+            .unwrap();
+        assert!(!typo.poll(&composer));
+        assert!(typo.suggestions.is_empty());
+        let latest = incoming.try_recv().unwrap();
+        assert!(matches!(latest.query, Query::Suggest(snapshot) if snapshot.text == "最新"));
+        assert!(matches!(incoming.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
     fn applies_endpoint_rate_and_cancels_waiting_before_sending() {
         let mut settings = TypoSettings {
             provider: TypoProvider::D1,
@@ -1143,6 +1241,7 @@ mod tests {
             loop {
                 match listener.accept() {
                     Ok((mut socket, _)) => {
+                        socket.set_nonblocking(false).unwrap();
                         socket
                             .set_read_timeout(Some(Duration::from_secs(1)))
                             .unwrap();
@@ -1236,15 +1335,15 @@ mod tests {
         for key in "teh".chars() {
             keyboard.apply(Action::Key(key));
         }
-        keyboard.typo.as_mut().unwrap().suggestion = Some(Suggestion {
+        keyboard.typo.as_mut().unwrap().suggestions = vec![Suggestion {
             word: "the".into(),
             range: 0..3,
-        });
+        }];
         keyboard.apply(Action::Backspace);
         keyboard.apply(Action::Backspace);
         keyboard.apply(Action::CorrectTypo("the".into()));
         assert_eq!(keyboard.composer.text(), "t");
-        assert!(keyboard.typo_suggestion().is_none());
+        assert!(keyboard.typo_suggestions().next().is_none());
 
         keyboard.clear();
         for key in "teh".chars() {
@@ -1552,6 +1651,7 @@ mod tests {
                     revision: 0,
                     result: Ok(Outcome::Report(pair.clone())),
                     retry: None,
+                    suggestion: false,
                 })
                 .unwrap();
         }
@@ -1566,6 +1666,7 @@ mod tests {
                 revision: 0,
                 result: Ok(Outcome::Report(pair.clone())),
                 retry: None,
+                suggestion: false,
             })
             .unwrap();
         typo.poll(&composer);

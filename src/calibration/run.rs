@@ -213,6 +213,7 @@ mod tests {
                         let active = &active;
                         let max = &max;
                         handlers.spawn(move || {
+                            stream.set_nonblocking(false).unwrap();
                             stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
                             let mut reader = BufReader::new(&mut stream);
                             let mut length = 0;
