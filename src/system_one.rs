@@ -278,7 +278,12 @@ impl Request {
             )
         })?;
         if !(200..300).contains(&status) {
-            return Err(io::Error::other(format!("HTTP {status}")));
+            let kind = if status == 404 {
+                io::ErrorKind::NotFound
+            } else {
+                io::ErrorKind::Other
+            };
+            return Err(io::Error::new(kind, format!("HTTP {status}")));
         }
         Ok(())
     }

@@ -19,9 +19,9 @@ use std::{
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 use crate::{
+    download::{Progress, fetch},
     i18n::tr,
     ime::misconversion::{FILE, Table, Tally},
-    local_d1::{Progress, fetch},
 };
 
 pub const DATA_BYTES: u64 = 98_567_960;

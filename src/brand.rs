@@ -1,8 +1,12 @@
 use eframe::{
-    egui::{ColorImage, IconData, Id, Image, TextureHandle, TextureOptions, Ui},
+    egui::{
+        Align, ColorImage, IconData, Id, Image, Layout, RichText, TextureHandle, TextureOptions, Ui,
+    },
     icon_data::from_png_bytes,
 };
 use std::sync::{Arc, LazyLock};
+
+use crate::update::VERSION_LABEL;
 
 static ICON: LazyLock<Arc<IconData>> = LazyLock::new(|| {
     Arc::new(
@@ -34,5 +38,15 @@ pub fn wordmark_texture(ui: &Ui) -> TextureHandle {
 pub fn wordmark(ui: &mut Ui, height: f32) {
     let texture = wordmark_texture(ui);
     let size = texture.size_vec2();
-    ui.add(Image::new((texture.id(), size * (height / size.y))).alt_text("ViME"));
+    ui.allocate_ui_with_layout(
+        eframe::egui::vec2(0., height),
+        Layout::left_to_right(Align::Max),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 5.;
+            ui.add(Image::new((texture.id(), size * (height / size.y))).alt_text("ViME"));
+            ui.add(
+                eframe::egui::Label::new(RichText::new(VERSION_LABEL).size(10.).weak()).extend(),
+            );
+        },
+    );
 }

@@ -24,6 +24,7 @@ use vime::{
     misconversions, output,
     settings::{D1Device, Destination, Settings, TypoProvider, TypoSettings},
     steamvr::{Pointer, SteamVr, Surface},
+    update::{self, Update},
 };
 
 const BACKGROUND: Color32 = Color32::from_rgb(20, 26, 35);
@@ -98,6 +99,7 @@ struct App {
     steamvr_message: String,
     settings_message: String,
     settings_error: bool,
+    update: Update,
     api_key_edits: HashMap<String, Option<String>>,
     api_key_before_url: Option<(TypoProvider, String)>,
     model_download: Option<Download>,
@@ -180,6 +182,10 @@ impl App {
         };
         let mut keyboard = Keyboard::new(creation.egui_ctx.clone());
         keyboard.configure_typo(&settings.typo, settings.report_typos, &directory);
+        let mut update = Update::default();
+        if !cfg!(debug_assertions) {
+            update.check(&creation.egui_ctx);
+        }
         Ok(Self {
             directory,
             draft,
@@ -204,6 +210,7 @@ impl App {
             steamvr_message: String::new(),
             settings_error: !settings_message.is_empty(),
             settings_message,
+            update,
             api_key_edits: HashMap::new(),
             api_key_before_url: None,
             model_download: None,
@@ -390,7 +397,7 @@ impl App {
         }
     }
 
-    fn paint_overlay(&mut self) {
+    fn paint_overlay(&mut self, context: &egui::Context) {
         let (Some(vr), Ok(surfaces)) = (&mut self.vr, &mut self.surfaces) else {
             return;
         };
@@ -451,7 +458,7 @@ impl App {
                     &self.keyboard,
                     &self.settings,
                     &mut self.draft,
-                    &self.settings_message,
+                    (&self.settings_message, &self.update),
                     caret_visible,
                 )
             });
@@ -472,6 +479,10 @@ impl App {
             }
             Some(Command::SaveSettings) => {
                 self.save_draft();
+                None
+            }
+            Some(Command::Update(action)) => {
+                self.update_action(action, context);
                 None
             }
             None => None,
@@ -811,6 +822,12 @@ impl App {
             ui.add_space(10.);
             self.typo_report_settings(ui);
             ui.add_space(10.);
+            ui.separator();
+            ui.add_space(10.);
+            if let Some(action) = self.update.show(ui) {
+                self.update_action(action, ui.ctx());
+            }
+            ui.add_space(10.);
             if !self.settings_message.is_empty() {
                 ui.label(RichText::new(&self.settings_message).small().color(
                     if self.settings_error {
@@ -834,6 +851,14 @@ impl App {
                 }
             });
         });
+    }
+
+    fn update_action(&mut self, action: update::Action, context: &egui::Context) {
+        match action {
+            update::Action::Check => self.update.check(context),
+            update::Action::Restart => self.update.restart(context),
+        }
+        self.dashboard.redraw = true;
     }
 
     fn destination_settings(&mut self, ui: &mut Ui) {
@@ -1378,6 +1403,7 @@ fn editable_api_key_scope(typo: &TypoSettings) -> Option<String> {
 
 impl eframe::App for App {
     fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        self.dashboard.redraw |= self.update.poll();
         if let Some(result) = self.model_download.as_ref().and_then(Download::result) {
             self.model_download = None;
             self.model_error = result
@@ -1505,7 +1531,7 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.paint_requested = None;
-        self.paint_overlay();
+        self.paint_overlay(ui.ctx());
         if ui.input(|input| input.viewport().minimized == Some(true)) {
             return;
         }
@@ -1545,6 +1571,7 @@ impl eframe::App for App {
             surfaces.keyboard.destroy();
             surfaces.dashboard.destroy();
         }
+        self.update.apply_on_exit();
     }
 }
 

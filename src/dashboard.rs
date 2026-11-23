@@ -8,6 +8,7 @@ use vime::{
     i18n::{Lang, tr, tr_args},
     settings::{Destination, Settings},
     steamvr::DashboardEvent,
+    update::{self, Update},
 };
 
 pub const SIZE: [u32; 2] = [1040, 640];
@@ -33,6 +34,7 @@ pub enum Command {
     Keyboard(Action),
     OpenBindings,
     SaveSettings,
+    Update(update::Action),
 }
 
 #[derive(Default)]
@@ -118,7 +120,7 @@ impl Dashboard {
         keyboard: &Keyboard,
         applied: &Settings,
         draft: &mut Settings,
-        message: &str,
+        (message, update): (&str, &Update),
         caret_visible: bool,
     ) -> Option<Command> {
         let mut command = None;
@@ -147,7 +149,7 @@ impl Dashboard {
                         command = interaction.action.map(Command::Keyboard);
                     }
                     Page::Settings => {
-                        command = settings(ui, applied, draft, message);
+                        command = settings(ui, applied, draft, message, update);
                     }
                 }
             });
@@ -162,6 +164,7 @@ fn settings(
     applied: &Settings,
     draft: &mut Settings,
     message: &str,
+    update: &Update,
 ) -> Option<Command> {
     let mut command = None;
     ui.columns(2, |columns| {
@@ -228,7 +231,8 @@ fn settings(
             ui.label(message);
         }
     });
-    command
+    ui.add_space(12.);
+    update.show(ui).map(Command::Update).or(command)
 }
 
 pub fn destination_options(ui: &mut Ui, destination: &mut Destination) {

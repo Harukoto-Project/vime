@@ -3,6 +3,8 @@ pub mod brand;
 pub mod calibration;
 #[cfg(all(windows, target_arch = "x86_64"))]
 pub mod credentials;
+#[cfg(all(windows, target_arch = "x86_64"))]
+mod download;
 pub mod i18n;
 pub mod ime;
 #[cfg(all(windows, target_arch = "x86_64"))]
@@ -15,3 +17,5 @@ pub mod settings;
 pub mod steamvr;
 #[cfg(all(windows, target_arch = "x86_64"))]
 pub mod system_one;
+#[cfg(all(windows, target_arch = "x86_64"))]
+pub mod update;

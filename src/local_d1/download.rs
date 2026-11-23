@@ -1,30 +1,26 @@
 use std::{
-    env, fs,
-    io::{self, Write},
+    env, fs, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    ptr::{null, null_mut},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering::Relaxed},
+        atomic::Ordering::Relaxed,
         mpsc::{Receiver, TryRecvError, channel},
     },
     thread,
 };
 
-use windows_sys::Win32::{
-    Security::Cryptography::{
-        BCRYPT_HASH_HANDLE, BCRYPT_SHA256_ALG_HANDLE, BCryptCreateHash, BCryptDestroyHash,
-        BCryptFinishHash, BCryptHashData,
-    },
-    System::Threading::CREATE_NO_WINDOW,
-};
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 use super::{
     Archive, MODEL_NAME, MODEL_REVISION, Runtime, engine_path, manifest, model_path, runtime,
     runtime_cache,
 };
-use crate::{i18n::tr, settings::D1Device, system_one::Client};
+use crate::{
+    download::{Progress, fetch},
+    i18n::tr,
+    settings::D1Device,
+};
 use std::os::windows::process::CommandExt;
 
 pub const MODEL_BYTES: u64 = 1_099_629_888;
@@ -130,22 +126,6 @@ impl Drop for Download {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct Progress {
-    pub(crate) received: AtomicU64,
-    pub(crate) cancelled: AtomicBool,
-}
-
-impl Progress {
-    pub(crate) fn check(&self) -> io::Result<()> {
-        if self.cancelled.load(Relaxed) {
-            Err(io::ErrorKind::Interrupted.into())
-        } else {
-            Ok(())
-        }
-    }
-}
-
 fn install_model(directory: &Path, progress: &Progress) -> io::Result<()> {
     let path = model_path(directory);
     let parent = path.parent().expect("model has a parent directory");
@@ -239,108 +219,4 @@ fn extract_archive(tar: &Path, archive: &Path, tools: &Path, asset: &Archive) ->
         return Err(extraction_failed());
     }
     Ok(())
-}
-
-pub(crate) fn fetch(
-    url: &str,
-    bytes: u64,
-    expected: &str,
-    directory: &Path,
-    progress: &Progress,
-) -> io::Result<tempfile::NamedTempFile> {
-    progress.check()?;
-    let mut file = tempfile::NamedTempFile::new_in(directory)?;
-    let mut hash = Sha256::new()?;
-    let mut written = 0;
-    Client::download(url, |chunk| {
-        progress.check()?;
-        written += chunk.len() as u64;
-        if written > bytes {
-            return Err(io::Error::other(tr(
-                "ダウンロードしたファイルを検証できませんでした",
-            )));
-        }
-        file.write_all(chunk)?;
-        hash.update(chunk)?;
-        progress.received.fetch_add(chunk.len() as u64, Relaxed);
-        Ok(())
-    })?;
-    progress.check()?;
-    if written != bytes || !hash.matches(expected)? {
-        return Err(io::Error::other(tr(
-            "ダウンロードしたファイルを検証できませんでした",
-        )));
-    }
-    file.as_file().sync_all()?;
-    Ok(file)
-}
-
-struct Sha256(BCRYPT_HASH_HANDLE);
-
-impl Sha256 {
-    fn new() -> io::Result<Self> {
-        let mut handle = null_mut();
-        check_hash(unsafe {
-            BCryptCreateHash(
-                BCRYPT_SHA256_ALG_HANDLE,
-                &mut handle,
-                null_mut(),
-                0,
-                null(),
-                0,
-                0,
-            )
-        })?;
-        Ok(Self(handle))
-    }
-
-    fn update(&mut self, bytes: &[u8]) -> io::Result<()> {
-        check_hash(unsafe { BCryptHashData(self.0, bytes.as_ptr(), bytes.len() as u32, 0) })
-    }
-
-    fn matches(self, expected: &str) -> io::Result<bool> {
-        let mut digest = [0; 32];
-        check_hash(unsafe {
-            BCryptFinishHash(self.0, digest.as_mut_ptr(), digest.len() as u32, 0)
-        })?;
-        let (expected, remainder) = expected.as_bytes().as_chunks::<2>();
-        Ok(expected.len() == digest.len()
-            && remainder.is_empty()
-            && digest.iter().zip(expected).all(|(byte, hex)| {
-                let digits = b"0123456789abcdef";
-                *hex == [digits[(byte >> 4) as usize], digits[(byte & 0x0f) as usize]]
-            }))
-    }
-}
-
-impl Drop for Sha256 {
-    fn drop(&mut self) {
-        unsafe { BCryptDestroyHash(self.0) };
-    }
-}
-
-fn check_hash(status: i32) -> io::Result<()> {
-    if status >= 0 {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "BCrypt SHA-256 failed ({status:#x})"
-        )))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hashes_incremental_download_chunks() {
-        let mut hash = Sha256::new().unwrap();
-        hash.update(b"a").unwrap();
-        hash.update(b"bc").unwrap();
-        assert!(
-            hash.matches("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
-                .unwrap()
-        );
-    }
 }

@@ -154,3 +154,16 @@ d1-2B（ローカル・CUDA）と日本語の誤変換データを取得して�
 誤字・誤変換の報告を許可する	Allow typo and misconversion reports	오타 및 오변환 보고 허용
 打ち直しが誤字や誤変換の修正と判定されると、修正前後の語、入力言語、アプリのバージョンが ViME の運営者に自動送信され、変換精度の分析と改善に使われます。送信する語に個人情報や機密情報が含まれる可能性があります。設定でいつでもオフにできます。	When a retyped word is identified as a typo or misconversion correction, the original and corrected words, input language, and app version are sent automatically to the ViME maintainers to analyze and improve conversion accuracy. These words may contain personal or confidential information. You can turn reporting off at any time in Settings.	다시 입력한 단어가 오타나 오변환의 수정으로 판정되면 수정 전후 단어, 입력 언어, 앱 버전이 ViME 운영자에게 자동으로 전송되어 변환 정확도를 분석하고 개선하는 데 사용됩니다. 전송되는 단어에 개인정보나 기밀 정보가 포함될 수 있습니다. 설정에서 언제든지 끌 수 있습니다.
 このビルドには報告先が設定されていません	This build has no reporting endpoint configured.	이 빌드에는 보고 대상이 설정되어 있지 않습니다.
+アップデート	Update	업데이트
+アップデートを確認	Check for updates	업데이트 확인
+アップデートを確認中…	Checking for updates…	업데이트 확인 중…
+v{0} をダウンロード中…	Downloading v{0}…	v{0} 다운로드 중…
+最新バージョンです	You're up to date.	최신 버전입니다.
+公開済みの安定版はありません	No stable release is available.	공개된 안정 버전이 없습니다.
+終了時に v{0} に更新します	ViME will update to v{0} when you quit.	종료하면 v{0}(으)로 업데이트합니다.
+再起動して更新	Restart to update	다시 시작하여 업데이트
+アップデートを準備できませんでした ({0})	Could not prepare the update ({0})	업데이트를 준비하지 못했습니다 ({0})
+アップデートを適用できませんでした ({0})	Could not apply the update ({0})	업데이트를 적용하지 못했습니다 ({0})
+アップデートを適用できませんでした	Could not apply the update	업데이트를 적용하지 못했습니다
+更新ファイルを展開できませんでした	Could not extract the update files	업데이트 파일의 압축을 풀지 못했습니다
+Windows x64 用の更新ファイルが見つかりません	The Windows x64 update files are missing	Windows x64 업데이트 파일을 찾을 수 없습니다
