@@ -1,0 +1,92 @@
+{0} を取得できません	Could not get {0}	{0}을(를) 가져올 수 없습니다
+{0}に失敗しました (OpenVR {1})	{0} failed (OpenVR {1})	{0} 실패 (OpenVR {1})
+2ボル式で入力 · 한/영で英数字に切り替え	Dubeolsik layout · 한/영 switches to direct input	두벌식으로 입력 · 한/영으로 영숫자 전환
+Enterで確定	Enter to confirm	Enter로 확정
+Enterで送信	Enter to send	Enter로 전송
+LOCALAPPDATA が見つかりません	LOCALAPPDATA was not found	LOCALAPPDATA를 찾을 수 없습니다
+OpenGL を初期化できません	Could not initialize OpenGL	OpenGL을 초기화할 수 없습니다
+OSC ポートまたはキーボード幅が範囲外です	The OSC port or keyboard width is out of range	OSC 포트 또는 키보드 너비가 범위를 벗어났습니다
+OSCパケットを送信しました	Sent the OSC packet	OSC 패킷을 전송했습니다
+Spaceで次の候補 · Enterで確定	Space for the next candidate · Enter to confirm	Space로 다음 후보 · Enter로 확정
+Spaceで変換 · Enterで確定	Space to convert · Enter to confirm	Space로 변환 · Enter로 확정
+SteamVR アクションセットを取得	Getting the SteamVR action set	SteamVR 액션 세트 가져오기
+SteamVR アクションを取得	Getting the SteamVR action	SteamVR 액션 가져오기
+SteamVR アプリを関連付け	Linking the SteamVR app	SteamVR 앱 연결
+SteamVR アプリ入力	SteamVR app input	SteamVR 앱 입력
+SteamVR が見つかりません	SteamVR was not found	SteamVR을 찾을 수 없습니다
+SteamVR コントローラーを取得	Getting the SteamVR controller	SteamVR 컨트롤러 가져오기
+SteamVR ダッシュボードに ViME を追加	Adding ViME to the SteamVR dashboard	SteamVR 대시보드에 ViME 추가
+SteamVR との接続が終了しました	The SteamVR connection ended	SteamVR 연결이 종료되었습니다
+SteamVR に接続	Connect to SteamVR	SteamVR에 연결
+SteamVR への接続	Connecting to SteamVR	SteamVR 연결
+SteamVR のパスをUTF-8に変換できません	Could not convert the SteamVR path to UTF-8	SteamVR 경로를 UTF-8로 변환할 수 없습니다
+SteamVR バインド画面を開く	Opening the SteamVR binding screen	SteamVR 바인딩 화면 열기
+SteamVR向け IMEキーボード	IME keyboard for SteamVR	SteamVR용 IME 키보드
+UDP ポート	UDP port	UDP 포트
+ViME を SteamVR に登録	Registering ViME with SteamVR	SteamVR에 ViME 등록
+VR キーボード	VR keyboard	VR 키보드
+VR テクスチャの透過を設定	Setting VR texture transparency	VR 텍스처 투명도 설정
+VR では右スティック押し込みで開閉し、左右のトリガーでキーを選びます。	In VR, click the right stick to open or close the keyboard and pull either trigger to press a key.	VR에서는 오른쪽 스틱을 눌러 키보드를 열고 닫으며, 좌우 트리거로 키를 선택합니다.
+VR の割り当てを編集	Edit VR bindings	VR 컨트롤러 설정 편집
+VR の描画先を作成できません	Could not create the VR render target	VR 렌더링 대상을 만들 수 없습니다
+VRChat の OSC を有効にしてください	Enable OSC in VRChat	VRChat에서 OSC를 활성화하세요
+VRChat の上限は144文字・9行です	VRChat allows up to 144 characters and 9 lines	VRChat의 제한은 144자·9줄입니다
+VRChat側でOSCを有効にしてください	Enable OSC in VRChat	VRChat에서 OSC를 활성화하세요
+VRアプリの入力欄	VR app text field	VR 앱의 입력란
+VRアプリの入力欄を開き、Windows で前面にします	Open a text field in the VR app and bring it to the front in Windows	VR 앱의 입력란을 열고 Windows에서 앞으로 가져옵니다
+VRアプリの入力欄を開き、Windowsでそのアプリを前面にしてください	Open a text field in the VR app and bring that app to the front in Windows	VR 앱의 입력란을 열고 Windows에서 해당 앱을 앞으로 가져오세요
+VRアプリの入力欄を開き、Windowsで前面にします	Open a text field in the VR app and bring it to the front in Windows	VR 앱의 입력란을 열고 Windows에서 앞으로 가져옵니다
+VRキーボードの幅を変更	Resizing the VR keyboard	VR 키보드 너비 변경
+VRキーボードを作成	Creating the VR keyboard	VR 키보드 만들기
+VRキーボードを配置	Placing the VR keyboard	VR 키보드 배치
+VRキーボードを表示	Showing the VR keyboard	VR 키보드 표시
+VRキーボードを描画	Rendering the VR keyboard	VR 키보드 그리기
+VRキーボードを閉じる	Hiding the VR keyboard	VR 키보드 숨기기
+Windows ショートカットを初期化できません ({0})	Could not initialize the Windows shortcut ({0})	Windows 단축키를 초기화할 수 없습니다 ({0})
+Windows ショートカットを設定できません	Could not set the Windows shortcut	Windows 단축키를 설정할 수 없습니다
+Windows の開閉キー  {0}	Windows toggle key  {0}	Windows 열기/닫기 키  {0}
+Windows 開閉ショートカット	Windows toggle shortcut	Windows 열기/닫기 단축키
+キーボード	Keyboard	키보드
+キーボードプレビュー	Keyboard preview	키보드 미리보기
+キーボードを開く	Open keyboard	키보드 열기
+キーボードを閉じる	Close keyboard	키보드 닫기
+キーボード幅	Keyboard width	키보드 너비
+このプロセスは既に SteamVR に接続しています	This process is already connected to SteamVR	이 프로세스는 이미 SteamVR에 연결되어 있습니다
+コントローラーの割り当てを編集	Edit controller bindings	컨트롤러 설정 편집
+コントローラー設定を読み込み	Loading the controller configuration	컨트롤러 설정 불러오기
+ショートカットは Ctrl+Shift+F8 のように入力してください	Enter a shortcut such as Ctrl+Shift+F8	단축키는 Ctrl+Shift+F8 형식으로 입력하세요
+ショートカットを登録できません ({0})	Could not register the shortcut ({0})	단축키를 등록할 수 없습니다 ({0})
+スペース	Space	스페이스
+ダッシュボードのパネル幅を設定	Setting the dashboard panel width	대시보드 패널 너비 설정
+ダッシュボードのポインターを設定	Setting the dashboard pointer	대시보드 포인터 설정
+ダッシュボードの座標を設定	Setting the dashboard coordinates	대시보드 좌표 설정
+ダッシュボードを描画	Rendering the dashboard	대시보드 그리기
+チャット通知音	Chat notification sound	채팅 알림음
+トリガーでキーを選択	Pull a trigger to press a key	트리거로 키 선택
+ヘッドセットのトラッキングを取得できません	Could not get headset tracking	헤드셋 트래킹을 가져올 수 없습니다
+メッセージを入力	Type a message	메시지 입력
+ローマ字で入力 · 半角/全角で半角英数字に切り替え	Type in romaji · 半/全 switches to direct input	로마자로 입력 · 半/全으로 직접 입력 전환
+右スティック押し込みで開閉	Click the right stick to open or close	오른쪽 스틱을 눌러 열기/닫기
+英数字 · 한/영でハングルに切り替え	Direct input · 한/영 switches to Hangul	영숫자 · 한/영으로 한글 전환
+絵文字	Emoji	이모지
+絵文字・記号	Emoji & symbols	이모지·기호
+絵文字は一覧または :cat: などの短縮名から選択	Pick an emoji from the list or by a shortcode such as :cat:	이모지는 목록 또는 :cat: 같은 단축 이름으로 선택
+言語	Language	언어
+次の候補	Next	다음 후보
+切断	Disconnect	연결 해제
+接続済み	Connected	연결됨
+接続済み · キーボード表示中	Connected · keyboard shown	연결됨 · 키보드 표시 중
+設定	Settings	설정
+設定を読み込めませんでした ({0})	Could not load settings ({0})	설정을 불러오지 못했습니다 ({0})
+設定を保存	Save settings	설정 저장
+設定を保存しました	Settings saved	설정을 저장했습니다
+設定を保存できません ({0})	Could not save settings ({0})	설정을 저장할 수 없습니다 ({0})
+先に SteamVR に接続してください	Connect to SteamVR first	먼저 SteamVR에 연결하세요
+全消去	Clear all	모두 지우기
+送信する文章を入力してください	Enter a message to send	보낼 문장을 입력하세요
+送信先	Destination	전송 대상
+入力イベントを送信しました	Sent the input events	입력 이벤트를 전송했습니다
+半角英数字 · 半角/全角で日本語入力に切り替え	Direct input · 半/全 switches to Japanese input	직접 입력 · 半/全으로 일본어 입력 전환
+閉じる	Close	닫기
+変換	Convert	변환
+未接続	Not connected	연결 안 됨

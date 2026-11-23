@@ -4,6 +4,7 @@ use crate::{
 };
 use eframe::egui::{self, Color32, Event, Frame, Margin, Pos2, RichText, Stroke, Ui};
 use vime::{
+    i18n::{Lang, tr, tr_args},
     settings::{Destination, Settings},
     steamvr::DashboardEvent,
 };
@@ -21,8 +22,8 @@ pub enum Page {
 impl Page {
     pub fn tabs(page: &mut Self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            ui.selectable_value(page, Self::Keyboard, "キーボード");
-            ui.selectable_value(page, Self::Settings, "設定");
+            ui.selectable_value(page, Self::Keyboard, tr("キーボード"));
+            ui.selectable_value(page, Self::Settings, tr("設定"));
         });
     }
 }
@@ -39,6 +40,8 @@ pub struct Dashboard {
     mouse: Option<Pos2>,
     down: bool,
     events: Vec<Event>,
+    /// The repeating key the pointer is holding down.
+    pub held: Option<Action>,
     pub active: bool,
     pub redraw: bool,
 }
@@ -99,6 +102,7 @@ impl Dashboard {
 
     fn leave(&mut self) {
         cancel_pointer(&mut self.events, self.down);
+        self.held = None;
         self.mouse = None;
         self.down = false;
     }
@@ -113,6 +117,7 @@ impl Dashboard {
         caret_visible: bool,
     ) -> Option<Command> {
         let mut command = None;
+        let mut held = None;
         let old_page = self.page;
         Frame::new()
             .fill(Color32::from_rgb(27, 37, 51))
@@ -131,15 +136,17 @@ impl Dashboard {
                 match self.page {
                     Page::Keyboard => {
                         let width = ui.available_width().min(SIZE[0] as f32 - 64.);
-                        command =
-                            keyboard::show(ui, keyboard, width, applied.destination, caret_visible)
-                                .map(Command::Keyboard);
+                        let interaction =
+                            keyboard::show(ui, keyboard, width, applied.destination, caret_visible);
+                        held = interaction.held;
+                        command = interaction.action.map(Command::Keyboard);
                     }
                     Page::Settings => {
                         command = settings(ui, applied, draft, message);
                     }
                 }
             });
+        self.held = held;
         self.redraw |= old_page != self.page;
         command
     }
@@ -156,15 +163,15 @@ fn settings(
         let [output, controls] = columns else {
             unreachable!("two dashboard settings columns")
         };
-        output.heading("送信先");
+        output.heading(tr("送信先"));
         output.add_space(7.);
         destination_options(output, &mut draft.destination);
         output.add_space(10.);
         if draft.destination == Destination::Osc {
-            output.label("VRChat の OSC を有効にしてください");
+            output.label(tr("VRChat の OSC を有効にしてください"));
             output.add_space(8.);
             output.horizontal(|ui| {
-                ui.label("UDP ポート");
+                ui.label(tr("UDP ポート"));
                 ui.label(RichText::new(draft.osc_port.to_string()).strong());
             });
             output.horizontal(|ui| {
@@ -174,30 +181,36 @@ fn settings(
                     }
                 }
             });
-            output.checkbox(&mut draft.osc_notify, "チャット通知音");
+            output.checkbox(&mut draft.osc_notify, tr("チャット通知音"));
         } else {
-            output.label("VRアプリの入力欄を開き、Windows で前面にします");
+            output.label(tr("VRアプリの入力欄を開き、Windows で前面にします"));
         }
 
-        controls.heading("VR キーボード");
+        controls.heading(tr("VR キーボード"));
         controls.add_space(7.);
-        controls.label("右スティック押し込みで開閉");
-        controls.label("トリガーでキーを選択");
+        controls.label(tr("右スティック押し込みで開閉"));
+        controls.label(tr("トリガーでキーを選択"));
         controls.add_space(7.);
-        if controls.button("コントローラーの割り当てを編集").clicked() {
+        if controls
+            .button(tr("コントローラーの割り当てを編集"))
+            .clicked()
+        {
             command = Some(Command::OpenBindings);
         }
         controls.add_space(10.);
-        controls.label("キーボード幅");
+        controls.label(tr("キーボード幅"));
         controls.add(egui::Slider::new(&mut draft.overlay_width, 0.65..=1.65).suffix(" m"));
-        controls.label(format!("Windows の開閉キー  {}", applied.hotkey));
+        controls.label(tr_args("Windows の開閉キー  {0}", &[&applied.hotkey]));
+        controls.add_space(10.);
+        controls.label(tr("言語"));
+        language_options(controls, &mut draft.language);
     });
     ui.add_space(24.);
     ui.separator();
     ui.add_space(10.);
     ui.horizontal(|ui| {
         let save = egui::Button::new(
-            RichText::new("設定を保存")
+            RichText::new(tr("設定を保存"))
                 .color(Color32::from_rgb(17, 36, 53))
                 .strong(),
         )
@@ -221,5 +234,13 @@ pub fn destination_options(ui: &mut Ui, destination: &mut Destination) {
             Destination::SteamVrInput,
             Destination::SteamVrInput.label(),
         );
+    });
+}
+
+pub fn language_options(ui: &mut Ui, language: &mut Lang) {
+    ui.horizontal_wrapped(|ui| {
+        for option in Lang::ALL {
+            ui.selectable_value(language, option, option.name());
+        }
     });
 }

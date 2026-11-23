@@ -1,3 +1,4 @@
+use crate::i18n::{Lang, tr};
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs, io,
@@ -35,7 +36,7 @@ impl Destination {
     pub fn label(self) -> &'static str {
         match self {
             Self::Osc => "VRChat OSC",
-            Self::SteamVrInput => "SteamVR アプリ入力",
+            Self::SteamVrInput => tr("SteamVR アプリ入力"),
         }
     }
 }
@@ -48,11 +49,13 @@ pub struct Settings {
     pub osc_notify: bool,
     pub hotkey: String,
     pub overlay_width: f32,
+    pub language: Lang,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            language: Lang::system(),
             destination: Destination::Osc,
             osc_port: 9000,
             osc_notify: false,
@@ -66,7 +69,9 @@ impl Settings {
     pub fn directory() -> io::Result<PathBuf> {
         env::var_os("LOCALAPPDATA")
             .map(|path| PathBuf::from(path).join("ViME"))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "LOCALAPPDATA が見つかりません"))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, tr("LOCALAPPDATA が見つかりません"))
+            })
     }
 
     pub fn load(path: &Path) -> io::Result<Self> {
@@ -93,7 +98,7 @@ impl Settings {
         if self.osc_port == 0 || !(0.65..=1.65).contains(&self.overlay_width) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "OSC ポートまたはキーボード幅が範囲外です",
+                tr("OSC ポートまたはキーボード幅が範囲外です"),
             ));
         }
         Ok(())

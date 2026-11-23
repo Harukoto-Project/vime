@@ -1,5 +1,6 @@
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 use std::sync::mpsc::{Receiver, channel};
+use vime::i18n::{tr, tr_args};
 
 pub struct Hotkeys {
     manager: GlobalHotKeyManager,
@@ -24,14 +25,16 @@ impl Hotkeys {
     }
 
     pub fn prepare(&self, shortcut: &str) -> Result<HotKey, String> {
-        let key: HotKey = shortcut
-            .trim()
-            .parse()
-            .map_err(|_| "ショートカットは Ctrl+Shift+F8 のように入力してください".to_owned())?;
+        let key: HotKey = shortcut.trim().parse().map_err(|_| {
+            tr("ショートカットは Ctrl+Shift+F8 のように入力してください").to_owned()
+        })?;
         if self.current != Some(key) {
-            self.manager
-                .register(key)
-                .map_err(|error| format!("ショートカットを登録できません ({error})"))?;
+            self.manager.register(key).map_err(|error| {
+                tr_args(
+                    "ショートカットを登録できません ({0})",
+                    &[&error.to_string()],
+                )
+            })?;
         }
         Ok(key)
     }

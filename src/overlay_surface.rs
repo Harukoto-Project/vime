@@ -10,6 +10,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use vime::i18n::tr;
 
 const RETRY_DELAY: Duration = Duration::from_millis(250);
 const CURSOR_INTERVAL: Duration = Duration::from_micros(16_667);
@@ -332,7 +333,7 @@ fn make_target(gl: &glow::Context, size: [u32; 2]) -> Result<Target, String> {
         if !complete {
             gl.delete_framebuffer(framebuffer);
             gl.delete_texture(texture);
-            return Err("VR の描画先を作成できません".into());
+            return Err(tr("VR の描画先を作成できません").into());
         }
         Ok(Target {
             framebuffer,

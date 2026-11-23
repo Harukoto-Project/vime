@@ -15,7 +15,9 @@ A virtual keyboard with IME for SteamVR. Type in Japanese, English, and Korean i
 
 ## Setup
 
-Requires Windows x64, Rust 1.95 or later, and MSVC C++ Build Tools. Install SteamVR to use the keyboard in VR.
+With the release zip (`ViME-0.1.0-windows-x64.zip`), extract it and run `vime.exe`. Rust and build tools are not needed; Windows x64 and SteamVR are enough.
+
+To build from source, you need Windows x64, Rust 1.95 or later, and MSVC C++ Build Tools. Install SteamVR to use the keyboard in VR.
 
 ```powershell
 cargo run --release --locked

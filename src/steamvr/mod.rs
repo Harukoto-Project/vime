@@ -2,6 +2,7 @@ mod abi;
 mod actions;
 mod geometry;
 
+use crate::i18n::{tr, tr_args};
 use abi::{
     ActionPose, ActionSet, Applications, Digital, Event, Input, Matrix, Overlay, Pose, System,
     Texture,
@@ -59,8 +60,8 @@ impl Runtime {
     fn connect() -> Result<Self> {
         let guard = RUNTIME_LOCK
             .try_lock()
-            .map_err(|_| "このプロセスは既に SteamVR に接続しています")?;
-        let path = actions::runtime_dll().ok_or("SteamVR が見つかりません")?;
+            .map_err(|_| tr("このプロセスは既に SteamVR に接続しています"))?;
+        let path = actions::runtime_dll().ok_or(tr("SteamVR が見つかりません"))?;
         // Only use the SteamVR installation DLL, never the process search path.
         let library = unsafe { Library::new(path) }.map_err(|error| error.to_string())?;
         let mut error = 0;
@@ -77,7 +78,7 @@ impl Runtime {
             init(&mut error, abi::APPLICATION_OVERLAY);
             (shutdown, interface)
         };
-        checked(error, "SteamVR に接続")?;
+        checked(error, tr("SteamVR への接続"))?;
         Ok(Self {
             _library: library,
             shutdown,
@@ -91,7 +92,10 @@ impl Runtime {
         let table = unsafe { (self.interface)(version.as_ptr(), &mut error) };
         checked(error, &version.to_string_lossy())?;
         if table.is_null() {
-            Err(format!("{} を取得できません", version.to_string_lossy()))
+            Err(tr_args(
+                "{0} を取得できません",
+                &[&version.to_string_lossy()],
+            ))
         } else {
             Ok(table)
         }
@@ -134,7 +138,7 @@ impl SteamVr {
         let path_string = |path: &Path| {
             CString::new(
                 path.to_str()
-                    .ok_or("SteamVR のパスをUTF-8に変換できません")?,
+                    .ok_or(tr("SteamVR のパスをUTF-8に変換できません"))?,
             )
             .map_err(|error| error.to_string())
         };
@@ -147,21 +151,21 @@ impl SteamVr {
 
         checked(
             applications.add_manifest(app_path.as_ptr(), true),
-            "ViME を SteamVR に登録",
+            tr("ViME を SteamVR に登録"),
         )?;
         checked(
             applications.identify(std::process::id(), actions::APP_KEY.as_ptr()),
-            "SteamVR アプリを関連付け",
+            tr("SteamVR アプリを関連付け"),
         )?;
         checked(
             input.set_manifest(actions_path.as_ptr()),
-            "コントローラー設定を読み込み",
+            tr("コントローラー設定を読み込み"),
         )?;
         let set = |path: &CStr| {
             let mut handle = 0;
             checked(
                 input.set_handle(path.as_ptr(), &mut handle),
-                "SteamVR アクションセットを取得",
+                tr("SteamVR アクションセットを取得"),
             )?;
             Ok::<_, String>(handle)
         };
@@ -169,7 +173,7 @@ impl SteamVr {
             let mut handle = 0;
             checked(
                 input.action_handle(path.as_ptr(), &mut handle),
-                "SteamVR アクションを取得",
+                tr("SteamVR アクションを取得"),
             )?;
             Ok::<_, String>(handle)
         };
@@ -177,7 +181,7 @@ impl SteamVr {
             let mut handle = 0;
             checked(
                 input.source_handle(path.as_ptr(), &mut handle),
-                "SteamVR コントローラーを取得",
+                tr("SteamVR コントローラーを取得"),
             )?;
             Ok::<_, String>(handle)
         };
@@ -192,7 +196,7 @@ impl SteamVr {
         let mut handle = 0;
         checked(
             overlay.create(actions::APP_KEY.as_ptr(), c"ViME".as_ptr(), &mut handle),
-            "VRキーボードを作成",
+            tr("VRキーボードを作成"),
         )?;
         let mut session = Self {
             _runtime: runtime,
@@ -229,21 +233,21 @@ impl SteamVr {
                 &mut self.dashboard,
                 &mut thumbnail,
             ),
-            "SteamVR ダッシュボードに ViME を追加",
+            tr("SteamVR ダッシュボードに ViME を追加"),
         )?;
         self.configure_texture(self.dashboard)?;
         checked(
             self.overlay.set_width(self.dashboard, 1.9),
-            "ダッシュボードのパネル幅を設定",
+            tr("ダッシュボードのパネル幅を設定"),
         )?;
         checked(
             self.overlay.input_method(self.dashboard, abi::INPUT_MOUSE),
-            "ダッシュボードのポインターを設定",
+            tr("ダッシュボードのポインターを設定"),
         )?;
         checked(
             self.overlay
                 .mouse_scale(self.dashboard, &size.map(|axis| axis as f32)),
-            "ダッシュボードの座標を設定",
+            tr("ダッシュボードの座標を設定"),
         )?;
 
         // The static icon is submitted once. Interactive panels use persistent GL textures.
@@ -274,7 +278,7 @@ impl SteamVr {
     fn configure_texture(&self, handle: u64) -> Result<()> {
         checked(
             self.overlay.flag(handle, abi::PREMULTIPLIED_ALPHA, true),
-            "VR テクスチャの透過を設定",
+            tr("VR テクスチャの透過を設定"),
         )
     }
 
@@ -282,7 +286,7 @@ impl SteamVr {
         checked(
             self.input
                 .open_bindings(actions::APP_KEY.as_ptr(), self.toggle_set, 0, desktop),
-            "SteamVR バインド画面を開く",
+            tr("SteamVR バインド画面を開く"),
         )
     }
 
@@ -298,14 +302,14 @@ impl SteamVr {
         let mut head = Pose::default();
         self.system.tracking_pose(abi::STANDING, 0.0, &mut head, 1);
         if !head.valid || !head.connected {
-            return Err("ヘッドセットのトラッキングを取得できません".into());
+            return Err(tr("ヘッドセットのトラッキングを取得できません").into());
         }
         let panel = geometry::anchor(&head.transform);
         self.set_width(width)?;
         checked(
             self.overlay
                 .set_transform(self.handle, abi::STANDING, &panel),
-            "VRキーボードを配置",
+            tr("VRキーボードを配置"),
         )?;
         self.panel = Some(panel);
         self.armed = [false; 2];
@@ -315,7 +319,7 @@ impl SteamVr {
     pub fn set_width(&mut self, width: f32) -> Result<()> {
         checked(
             self.overlay.set_width(self.handle, width),
-            "VRキーボードの幅を変更",
+            tr("VRキーボードの幅を変更"),
         )?;
         self.width = width;
         Ok(())
@@ -323,7 +327,7 @@ impl SteamVr {
 
     pub fn hide(&mut self) -> Result<()> {
         if self.world_shown {
-            checked(self.overlay.hide(self.handle), "VRキーボードを閉じる")?;
+            checked(self.overlay.hide(self.handle), tr("VRキーボードを閉じる"))?;
             self.world_shown = false;
         }
         self.panel = None;
@@ -345,12 +349,12 @@ impl SteamVr {
         checked(
             self.overlay.set_texture(handle, &texture),
             match surface {
-                Surface::Keyboard => "VRキーボードを描画",
-                Surface::Dashboard => "ダッシュボードを描画",
+                Surface::Keyboard => tr("VRキーボードを描画"),
+                Surface::Dashboard => tr("ダッシュボードを描画"),
             },
         )?;
         if matches!(surface, Surface::Keyboard) && self.visible() && !self.world_shown {
-            checked(self.overlay.show(handle), "VRキーボードを表示")?;
+            checked(self.overlay.show(handle), tr("VRキーボードを表示"))?;
             self.world_shown = true;
         }
         Ok(())
@@ -506,6 +510,9 @@ fn checked(code: i32, operation: &str) -> Result<()> {
     if code == 0 {
         Ok(())
     } else {
-        Err(format!("{operation}に失敗しました (OpenVR {code})"))
+        Err(tr_args(
+            "{0}に失敗しました (OpenVR {1})",
+            &[tr(operation), &code.to_string()],
+        ))
     }
 }

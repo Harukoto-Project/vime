@@ -1,8 +1,7 @@
 use crate::{
     dashboard::{self, Command, Dashboard, Page},
-    diagnostics::{Diagnostics, OverlayState},
     hotkeys::Hotkeys,
-    keyboard::{self, Action, Keyboard, VrKeys},
+    keyboard::{self, Action, Keyboard, Repeater, VrKeys},
     overlay_surface::OverlaySurface,
     power,
 };
@@ -12,11 +11,12 @@ use eframe::egui::{
 };
 use std::{
     env, fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
 use vime::{
+    i18n::{self, Lang, tr, tr_args},
     output,
     settings::{Destination, Settings},
     steamvr::{Pointer, SteamVr, Surface},
@@ -54,7 +54,6 @@ pub fn run() -> eframe::Result {
 
 struct App {
     directory: PathBuf,
-    diagnostics: Diagnostics,
     settings: Settings,
     draft: Settings,
     hotkeys: Option<Hotkeys>,
@@ -76,7 +75,13 @@ struct App {
     steamvr_message: String,
     settings_message: String,
     settings_error: bool,
+    /// Held-key repeat for the desktop window, the VR dashboard and the VR keyboard.
+    repeaters: [Repeater; 3],
 }
+
+const DESKTOP: usize = 0;
+const DASHBOARD: usize = 1;
+const WORLD: usize = 2;
 
 struct Surfaces {
     keyboard: OverlaySurface,
@@ -102,23 +107,25 @@ impl Surfaces {
 
 impl App {
     fn new(creation: &eframe::CreationContext<'_>) -> std::io::Result<Self> {
+        i18n::set_language(Lang::system());
+        let directory = Settings::directory()?;
+        let (settings, mut settings_message) = match Settings::load(&directory) {
+            Ok(settings) => (settings, String::new()),
+            Err(error) => (
+                Settings::default(),
+                tr_args("設定を読み込めませんでした ({0})", &[&error.to_string()]),
+            ),
+        };
+        i18n::set_language(settings.language);
+
         let fonts = windows_fonts();
         creation.egui_ctx.set_fonts(fonts.clone());
         creation.egui_ctx.set_visuals(visuals());
         let surfaces = creation
             .gl
             .clone()
-            .ok_or_else(|| "OpenGL を初期化できません".to_owned())
+            .ok_or_else(|| tr("OpenGL を初期化できません").to_owned())
             .and_then(|gl| Surfaces::new(gl, fonts));
-
-        let directory = Settings::directory()?;
-        let (settings, mut settings_message) = match Settings::load(&directory) {
-            Ok(settings) => (settings, String::new()),
-            Err(error) => (
-                Settings::default(),
-                format!("設定を読み込めませんでした ({error})"),
-            ),
-        };
         let hotkeys = match Hotkeys::new(creation.egui_ctx.clone()) {
             Ok(mut hotkeys) => {
                 match hotkeys.prepare(&settings.hotkey) {
@@ -128,12 +135,12 @@ impl App {
                 Some(hotkeys)
             }
             Err(error) => {
-                settings_message = format!("Windows ショートカットを初期化できません ({error})");
+                settings_message =
+                    tr_args("Windows ショートカットを初期化できません ({0})", &[&error]);
                 None
             }
         };
         Ok(Self {
-            diagnostics: Diagnostics::new(&directory),
             directory,
             draft: settings.clone(),
             settings,
@@ -156,6 +163,7 @@ impl App {
             steamvr_message: String::new(),
             settings_error: !settings_message.is_empty(),
             settings_message,
+            repeaters: Default::default(),
         })
     }
 
@@ -164,7 +172,7 @@ impl App {
         let prepared = match self.hotkeys.as_ref() {
             Some(hotkeys) => Some(hotkeys.prepare(&self.draft.hotkey)?),
             None if self.settings.hotkey != self.draft.hotkey => {
-                return Err("Windows ショートカットを設定できません".into());
+                return Err(tr("Windows ショートカットを設定できません").into());
             }
             None => None,
         };
@@ -172,7 +180,7 @@ impl App {
             if let (Some(hotkeys), Some(key)) = (&self.hotkeys, prepared) {
                 hotkeys.cancel(key);
             }
-            return Err(format!("設定を保存できません ({error})"));
+            return Err(tr_args("設定を保存できません ({0})", &[&error.to_string()]));
         }
         if let (Some(hotkeys), Some(key)) = (&mut self.hotkeys, prepared) {
             hotkeys.activate(key);
@@ -203,7 +211,7 @@ impl App {
 
     fn toggle(&mut self) {
         let Some(vr) = &mut self.vr else {
-            self.steamvr_message = "先に SteamVR に接続してください".into();
+            self.steamvr_message = tr("先に SteamVR に接続してください").into();
             return;
         };
         let new_visibility = !vr.visible();
@@ -222,6 +230,7 @@ impl App {
         self.pointers = [None; 2];
         self.last_pointers = [None; 2];
         self.draw_errors[0] = None;
+        self.repeaters[WORLD].release();
     }
 
     fn disconnect(&mut self) {
@@ -232,6 +241,8 @@ impl App {
         self.pointers = [None; 2];
         self.last_pointers = [None; 2];
         self.dashboard.reset();
+        self.repeaters[WORLD].release();
+        self.repeaters[DASHBOARD].release();
         self.dashboard_visible = false;
         self.paint_requested = None;
         self.draw_errors = [None, None];
@@ -245,7 +256,7 @@ impl App {
         match self.apply_settings() {
             Ok(()) => {
                 self.settings_error = false;
-                self.settings_message = "設定を保存しました".into();
+                self.settings_message = tr("設定を保存しました").into();
             }
             Err(error) => {
                 self.settings_error = true;
@@ -270,13 +281,13 @@ impl App {
                 let sent = match self.settings.destination {
                     Destination::Osc => {
                         output::send_osc(&text, self.settings.osc_port, self.settings.osc_notify)
-                            .map(|_| "OSCパケットを送信しました")
+                            .map(|_| tr("OSCパケットを送信しました"))
                     }
                     Destination::SteamVrInput => output::send_scene_input(
                         self.vr.as_ref().map_or(0, SteamVr::scene_pid),
                         &text,
                     )
-                    .map(|_| "入力イベントを送信しました"),
+                    .map(|_| tr("入力イベントを送信しました")),
                 };
                 match sent {
                     Ok(message) => {
@@ -305,14 +316,9 @@ impl App {
             let keyboard_changed = self.last_world != Some(frame);
             if keyboard_changed {
                 self.last_world = Some(frame);
-                let started = Instant::now();
                 self.pending_world_keys = Some(surfaces.keyboard.render(Vec::new(), |ui| {
                     keyboard::show_vr(ui, &self.keyboard, self.settings.destination, caret_visible)
                 }));
-                self.diagnostics
-                    .counters
-                    .world_render
-                    .observe(started.elapsed());
             }
             if keyboard_changed
                 || pointer_changed(&surfaces.keyboard, now, self.last_pointers, self.pointers)
@@ -325,27 +331,13 @@ impl App {
                     let pointer = pointer?;
                     Some((keys?.position(pointer.uv), pointer.down))
                 });
-                let started = Instant::now();
                 surfaces.keyboard.compose_pointers(pointers);
-                self.diagnostics
-                    .counters
-                    .world_cursor
-                    .observe(started.elapsed());
                 self.last_pointers = self.pointers;
             }
-            let started = Instant::now();
-            let counters = &mut self.diagnostics.counters;
-            if let Some(result) = surfaces.keyboard.present(|texture| {
-                let submitted = Instant::now();
-                let result = vr.present(Surface::Keyboard, texture);
-                counters.world_openvr.observe(submitted.elapsed());
-                result
-            }) {
-                counters.world_submit.observe(started.elapsed());
-                if let Err(error) = &result {
-                    counters.world_submit_errors += 1;
-                    counters.last_world_submit_error = Some(error.clone());
-                }
+            if let Some(result) = surfaces
+                .keyboard
+                .present(|texture| vr.present(Surface::Keyboard, texture))
+            {
                 if result.is_ok()
                     && let Some(keys) = self.pending_world_keys.take()
                 {
@@ -364,7 +356,6 @@ impl App {
             self.dashboard.redraw = false;
             self.dashboard_revision = revision;
             let events = self.dashboard.take_events();
-            let started = Instant::now();
             command = surfaces.dashboard.render(events, |ui| {
                 self.dashboard.show(
                     ui,
@@ -375,29 +366,21 @@ impl App {
                     caret_visible,
                 )
             });
-            self.diagnostics
-                .counters
-                .dashboard_render
-                .observe(started.elapsed());
         }
-        let started = Instant::now();
-        let counters = &mut self.diagnostics.counters;
-        if let Some(result) = surfaces.dashboard.present(|texture| {
-            let submitted = Instant::now();
-            let result = vr.present(Surface::Dashboard, texture);
-            counters.dashboard_openvr.observe(submitted.elapsed());
-            result
-        }) {
-            counters.dashboard_submit.observe(started.elapsed());
-            if let Err(error) = &result {
-                counters.dashboard_submit_errors += 1;
-                counters.last_dashboard_submit_error = Some(error.clone());
-            }
+        if let Some(result) = surfaces
+            .dashboard
+            .present(|texture| vr.present(Surface::Dashboard, texture))
+        {
             self.draw_errors[1] = result.err();
         }
 
         match command {
-            Some(Command::Keyboard(action)) => self.keyboard_action(action),
+            Some(Command::Keyboard(action)) => {
+                // A held key already acted when it was pressed.
+                if !(action.repeats() && self.repeaters[DASHBOARD].holding(&action)) {
+                    self.keyboard_action(action);
+                }
+            }
             Some(Command::OpenBindings) => {
                 self.settings_message = vr.open_bindings(false).err().unwrap_or_default();
                 self.dashboard.redraw = true;
@@ -418,11 +401,48 @@ impl App {
                 continue;
             }
             let close = matches!(action, Action::Close);
+            if action.repeats() {
+                self.repeaters[WORLD].begin(&action, Instant::now());
+            }
             self.keyboard_action(action);
             if close {
                 break;
             }
         }
+    }
+
+    /// Applies the keys that repeat while a VR controller holds them.
+    fn world_key_repeats(&mut self) {
+        let held = self.world_keys.as_ref().and_then(|keys| {
+            self.pointers
+                .iter()
+                .flatten()
+                .filter(|pointer| pointer.down)
+                .find_map(|pointer| keys.action_at(pointer.uv).filter(Action::repeats))
+        });
+        if let Some(action) = self.repeaters[WORLD].follow(held.as_ref(), Instant::now()) {
+            self.keyboard_action(action);
+        }
+    }
+
+    /// Applies a click from `source` unless its press already acted through the
+    /// repeater, then applies the key repeats of a held pointer.
+    /// Returns whether any key was applied.
+    fn pointer_repeats(
+        &mut self,
+        source: usize,
+        click: Option<Action>,
+        held: Option<Action>,
+    ) -> bool {
+        let repeater = &mut self.repeaters[source];
+        let click = click.filter(|action| !(action.repeats() && repeater.holding(action)));
+        let repeated = repeater.tick(held.as_ref(), Instant::now());
+        let mut acted = false;
+        for action in click.into_iter().chain(repeated) {
+            self.keyboard_action(action);
+            acted = true;
+        }
+        acted
     }
 
     fn page(&mut self, ui: &mut Ui) {
@@ -432,7 +452,7 @@ impl App {
             ui.vertical(|ui| {
                 ui.label(RichText::new("ViME").size(35.).strong().color(INK));
                 ui.label(
-                    RichText::new("SteamVR向け IMEキーボード")
+                    RichText::new(tr("SteamVR向け IMEキーボード"))
                         .size(15.)
                         .color(SECONDARY),
                 );
@@ -450,7 +470,7 @@ impl App {
             return;
         }
         ui.horizontal(|ui| {
-            ui.label(RichText::new("キーボードプレビュー").size(18.).strong());
+            ui.label(RichText::new(tr("キーボードプレビュー")).size(18.).strong());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
                     RichText::new(self.settings.destination.label())
@@ -461,20 +481,21 @@ impl App {
         });
         ui.add_space(5.);
         let width = ui.available_width().min(900.);
-        if let Some(action) = keyboard::show(
+        let interaction = keyboard::show(
             ui,
             &self.keyboard,
             width,
             self.settings.destination,
             self.keyboard.caret_blink(Instant::now()).0,
-        ) {
-            self.keyboard_action(action);
+        );
+        if self.pointer_repeats(DESKTOP, interaction.action, interaction.held) {
             ui.ctx().request_repaint();
         }
-        ui.label(
-            RichText::new("VR では右スティック押し込みで開閉し、左右のトリガーでキーを選びます。")
-                .color(SECONDARY),
-        );
+        if let Some(wait) = self.repeaters[DESKTOP].wait(Instant::now()) {
+            ui.ctx().request_repaint_after(wait);
+        }
+        let hint = tr("VR では右スティック押し込みで開閉し、左右のトリガーでキーを選びます。");
+        ui.label(RichText::new(hint).color(SECONDARY));
     }
 
     fn steamvr_panel(&mut self, ui: &mut Ui) {
@@ -483,9 +504,9 @@ impl App {
                 ui.vertical(|ui| {
                     ui.label(RichText::new("SteamVR").size(17.).strong());
                     let status = match &self.vr {
-                        Some(vr) if vr.visible() => "接続済み · キーボード表示中",
-                        Some(_) => "接続済み",
-                        None => "未接続",
+                        Some(vr) if vr.visible() => tr("接続済み · キーボード表示中"),
+                        Some(_) => tr("接続済み"),
+                        None => tr("未接続"),
                     };
                     ui.label(RichText::new(status).color(if self.vr.is_some() {
                         ACCENT
@@ -496,25 +517,25 @@ impl App {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if let Some(vr) = &self.vr {
                         let visible = vr.visible();
-                        if ui.button("切断").clicked() {
+                        if ui.button(tr("切断")).clicked() {
                             self.disconnect();
                             self.steamvr_message.clear();
                             return;
                         }
-                        if ui.button("VR の割り当てを編集").clicked() {
+                        if ui.button(tr("VR の割り当てを編集")).clicked() {
                             self.steamvr_message = vr.open_bindings(true).err().unwrap_or_default();
                         }
                         if ui
                             .add(Button::new(if visible {
-                                "キーボードを閉じる"
+                                tr("キーボードを閉じる")
                             } else {
-                                "キーボードを開く"
+                                tr("キーボードを開く")
                             }))
                             .clicked()
                         {
                             self.toggle();
                         }
-                    } else if ui.add(primary("SteamVR に接続")).clicked() {
+                    } else if ui.add(primary(tr("SteamVR に接続"))).clicked() {
                         self.connect();
                     }
                 });
@@ -530,45 +551,48 @@ impl App {
 
     fn settings_panel(&mut self, ui: &mut Ui) {
         panel().show(ui, |ui| {
-            ui.label(RichText::new("設定").size(18.).strong());
+            ui.label(RichText::new(tr("設定")).size(18.).strong());
             ui.add_space(5.);
             ui.columns(2, |columns| {
                 let [destination, binding] = columns else {
                     unreachable!("two settings columns")
                 };
-                destination.label(RichText::new("送信先").color(SECONDARY));
+                destination.label(RichText::new(tr("送信先")).color(SECONDARY));
                 dashboard::destination_options(destination, &mut self.draft.destination);
                 if self.draft.destination == Destination::Osc {
                     destination.horizontal_wrapped(|ui| {
-                        ui.label("UDP ポート");
+                        ui.label(tr("UDP ポート"));
                         ui.add(egui::DragValue::new(&mut self.draft.osc_port).range(1..=65535));
-                        ui.checkbox(&mut self.draft.osc_notify, "チャット通知音");
+                        ui.checkbox(&mut self.draft.osc_notify, tr("チャット通知音"));
                     });
                     destination.label(
-                        RichText::new("VRChat側でOSCを有効にしてください")
+                        RichText::new(tr("VRChat側でOSCを有効にしてください"))
                             .size(12.)
                             .color(SECONDARY),
                     );
                 } else {
                     destination.label(
-                        RichText::new("VRアプリの入力欄を開き、Windowsで前面にします")
+                        RichText::new(tr("VRアプリの入力欄を開き、Windowsで前面にします"))
                             .size(12.)
                             .color(SECONDARY),
                     );
                 }
 
-                binding.label(RichText::new("Windows 開閉ショートカット").color(SECONDARY));
+                binding.label(RichText::new(tr("Windows 開閉ショートカット")).color(SECONDARY));
                 binding.add(
                     egui::TextEdit::singleline(&mut self.draft.hotkey)
                         .hint_text("Ctrl+Shift+F8")
                         .desired_width(200.),
                 );
                 binding.horizontal_wrapped(|ui| {
-                    ui.label("キーボード幅");
+                    ui.label(tr("キーボード幅"));
                     ui.add(
                         egui::Slider::new(&mut self.draft.overlay_width, 0.65..=1.65).suffix(" m"),
                     );
                 });
+                binding.add_space(6.);
+                binding.label(RichText::new(tr("言語")).color(SECONDARY));
+                dashboard::language_options(binding, &mut self.draft.language);
             });
             ui.add_space(10.);
             ui.horizontal(|ui| {
@@ -581,7 +605,7 @@ impl App {
                 ));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
-                        .add_enabled(self.draft != self.settings, primary("設定を保存"))
+                        .add_enabled(self.draft != self.settings, primary(tr("設定を保存")))
                         .clicked()
                     {
                         self.save_draft();
@@ -594,10 +618,17 @@ impl App {
 
 impl eframe::App for App {
     fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
-        let started = Instant::now();
-        self.diagnostics.start_logic(started);
-        let mut dashboard_visible = false;
+        if i18n::language() != self.draft.language {
+            // The language picker takes effect at once; saving only remembers it.
+            i18n::set_language(self.draft.language);
+            self.keyboard.status("");
+            self.dashboard.redraw = true;
+        }
         self.keyboard.poll_candidates();
+        let held = self.dashboard.held.clone();
+        if let Some(action) = self.repeaters[DASHBOARD].tick(held.as_ref(), Instant::now()) {
+            self.keyboard_action(action);
+        }
         if std::mem::take(&mut self.auto_connect) {
             self.connect();
         }
@@ -605,21 +636,10 @@ impl eframe::App for App {
             self.toggle();
         }
         if let Some(vr) = &mut self.vr {
-            let poll_started = Instant::now();
             let frame = vr.poll(keyboard::ASPECT);
-            dashboard_visible = frame.dashboard_visible;
-            let counters = &mut self.diagnostics.counters;
-            counters.vr_poll.observe(poll_started.elapsed());
-            counters.pointer_observations += frame.pointers.iter().flatten().count() as u64;
-            counters.presses += frame.keyboard_presses.iter().flatten().count() as u64;
-            counters.dashboard_events += frame.dashboard_events.len() as u64;
-            if let Some(error) = frame.input_error {
-                counters.input_errors += 1;
-                counters.last_input_error = Some(error);
-            }
             if frame.quit {
                 self.disconnect();
-                self.steamvr_message = "SteamVR との接続が終了しました".into();
+                self.steamvr_message = tr("SteamVR との接続が終了しました").into();
             } else {
                 let resume_world =
                     self.dashboard_visible && !frame.dashboard_visible && vr.visible();
@@ -640,8 +660,6 @@ impl eframe::App for App {
                 }
                 if resume_world || resume_dashboard {
                     self.paint_requested = None;
-                    self.diagnostics.counters.world_resumes += u64::from(resume_world);
-                    self.diagnostics.counters.dashboard_resumes += u64::from(resume_dashboard);
                 }
                 self.dashboard
                     .feed(frame.dashboard_active, frame.dashboard_events);
@@ -657,6 +675,7 @@ impl eframe::App for App {
                         })
                     });
                     self.world_key_presses(frame.keyboard_presses);
+                    self.world_key_repeats();
                 }
             }
         }
@@ -690,7 +709,6 @@ impl eframe::App for App {
                     .is_none_or(|last| now - last >= HIDDEN_PAINT_RETRY)
             {
                 self.paint_requested = Some(now);
-                self.diagnostics.counters.paint_requests += 1;
                 context.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
             }
             // Poll VR independently of the desktop monitor's refresh rate.
@@ -700,26 +718,12 @@ impl eframe::App for App {
                 33_333
             }));
         }
-        self.diagnostics.state(OverlayState {
-            connected: self.vr.is_some(),
-            world_visible: self.vr.as_ref().is_some_and(SteamVr::visible),
-            dashboard_visible,
-            dashboard_active: self.dashboard.active,
-            desktop_minimized,
-        });
-        self.diagnostics.counters.logic.observe(started.elapsed());
-        self.diagnostics.sample(Instant::now(), || {
-            self.vr.as_ref().map_or(0, SteamVr::scene_pid)
-        });
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
-        let started = Instant::now();
-        self.diagnostics.start_ui(started);
         self.paint_requested = None;
         self.paint_overlay();
         if ui.input(|input| input.viewport().minimized == Some(true)) {
-            self.diagnostics.counters.ui.observe(started.elapsed());
             return;
         }
         // The root ui is rebuilt by eframe, including after a hidden-window VR frame.
@@ -731,7 +735,6 @@ impl eframe::App for App {
                     .auto_shrink([false; 2])
                     .show(ui, |ui| self.page(ui));
             });
-        self.diagnostics.counters.ui.observe(started.elapsed());
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
@@ -786,22 +789,41 @@ fn windows_fonts() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     if let Some(windows) = env::var_os("WINDIR") {
         let folder = PathBuf::from(windows).join("Fonts");
-        for (name, file) in [
-            ("meiryo", "meiryo.ttc"),
-            ("malgun", "malgun.ttf"),
-            ("emoji", "seguiemj.ttf"),
+        // Segoe UI for Latin text, then the UI variants of the Japanese and
+        // Korean system fonts, like most Windows apps. They go in front of
+        // egui's bundled fonts, which stay behind as a last fallback.
+        let mut front = 0;
+        for (name, file, index) in [
+            ("segoe-ui", "segoeui.ttf", 0),
+            ("yu-gothic-ui", "YuGothR.ttc", 1),
+            ("meiryo-ui", "meiryo.ttc", 1),
+            ("malgun", "malgun.ttf", 0),
+            ("symbols", "seguisym.ttf", 0),
         ] {
-            if let Ok(data) = fs::read(folder.join(file)) {
-                fonts
-                    .font_data
-                    .insert(name.to_owned(), Arc::new(FontData::from_owned(data)));
+            if let Some(data) = read_font(&folder, file, index) {
+                fonts.font_data.insert(name.to_owned(), data);
                 fonts
                     .families
                     .entry(FontFamily::Proportional)
                     .or_default()
-                    .push(name.to_owned());
+                    .insert(front, name.to_owned());
+                front += 1;
             }
+        }
+        if let Some(data) = read_font(&folder, "seguiemj.ttf", 0) {
+            fonts.font_data.insert("emoji".to_owned(), data);
+            fonts
+                .families
+                .entry(FontFamily::Proportional)
+                .or_default()
+                .push("emoji".to_owned());
         }
     }
     fonts
+}
+
+fn read_font(folder: &Path, file: &str, index: u32) -> Option<Arc<FontData>> {
+    let mut data = FontData::from_owned(fs::read(folder.join(file)).ok()?);
+    data.index = index;
+    Some(Arc::new(data))
 }

@@ -1,8 +1,12 @@
+mod conversion;
 mod emoji;
 mod japanese;
 mod korean;
 
 use unicode_segmentation::UnicodeSegmentation;
+
+pub use conversion::{Conversion, Segment};
+pub use japanese::warm_up as warm_up_dictionary;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Language {
@@ -30,6 +34,8 @@ pub struct Composer {
     committed: String,
     caret: usize,
     reading: String,
+    // Set while the reading is converted. `reading` is kept to return to it.
+    conversion: Option<Conversion>,
 }
 
 impl Composer {
@@ -45,6 +51,9 @@ impl Composer {
     }
 
     pub fn key(&mut self, key: char) {
+        if self.conversion.is_some() {
+            self.commit();
+        }
         match self.language {
             Language::Japanese
                 if key.is_ascii_alphabetic()
@@ -64,6 +73,10 @@ impl Composer {
     }
 
     pub fn backspace(&mut self) {
+        // Like desktop IMEs, the first Backspace only undoes the conversion.
+        if self.conversion.take().is_some() {
+            return;
+        }
         if self.reading.pop().is_none()
             && let Some((index, _)) = self.committed[..self.caret]
                 .grapheme_indices(true)
@@ -77,6 +90,7 @@ impl Composer {
     pub fn clear(&mut self) {
         self.committed.clear();
         self.reading.clear();
+        self.conversion = None;
         self.caret = 0;
     }
 
@@ -120,12 +134,87 @@ impl Composer {
         self.caret = self.committed.len();
     }
 
+    /// The underlined text as shown in the editor.
     pub fn preedit(&self) -> String {
-        self.convert(false)
+        match &self.conversion {
+            Some(conversion) => conversion.text(),
+            None => self.convert(false),
+        }
     }
 
+    /// The preedit split into clauses. The flag marks the clause being converted.
+    pub fn preedit_segments(&self) -> Vec<(String, bool)> {
+        match &self.conversion {
+            Some(conversion) => conversion
+                .segments()
+                .iter()
+                .enumerate()
+                .map(|(index, segment)| (segment.text().to_owned(), index == conversion.focus()))
+                .collect(),
+            None => vec![(self.convert(false), false)],
+        }
+    }
+
+    /// The text that committing the preedit would insert.
     pub fn reading(&self) -> String {
+        match &self.conversion {
+            Some(conversion) => conversion.text(),
+            None => self.convert(true),
+        }
+    }
+
+    /// The typed reading, ignoring any conversion of it.
+    pub fn raw_reading(&self) -> String {
         self.convert(true)
+    }
+
+    pub fn conversion(&self) -> Option<&Conversion> {
+        self.conversion.as_ref()
+    }
+
+    pub fn converting(&self) -> bool {
+        self.conversion.is_some()
+    }
+
+    /// Converts the Japanese reading into clauses. `hints` are clauses from the
+    /// system IME as `(reading, text)`. Returns false if there is nothing to convert.
+    pub fn convert_reading(&mut self, hints: &[(String, String)]) -> bool {
+        if self.language != Language::Japanese || self.conversion.is_some() {
+            return false;
+        }
+        let reading = self.raw_reading();
+        if reading.is_empty() {
+            return false;
+        }
+        self.conversion = Conversion::new(japanese::segments(&reading, hints));
+        self.conversion.is_some()
+    }
+
+    /// Chooses the next candidate of the focused clause.
+    pub fn next_candidate(&mut self) {
+        if let Some(conversion) = &mut self.conversion {
+            conversion.next_candidate();
+        }
+    }
+
+    /// Chooses `candidate` for the focused clause and moves to the next clause.
+    /// Choosing in the last clause commits the whole conversion.
+    pub fn pick_candidate(&mut self, candidate: &str) {
+        let Some(conversion) = &mut self.conversion else {
+            return;
+        };
+        conversion.select(candidate);
+        if conversion.is_last() {
+            self.commit();
+        } else {
+            conversion.move_focus(1);
+        }
+    }
+
+    pub fn move_segment(&mut self, step: i32) {
+        if let Some(conversion) = &mut self.conversion {
+            conversion.move_focus(step);
+        }
     }
 
     pub fn text(&self) -> String {
@@ -134,6 +223,9 @@ impl Composer {
     }
 
     pub fn candidates(&self) -> Vec<String> {
+        if self.conversion.is_some() {
+            return Vec::new();
+        }
         if let Some((_, shortcode)) = self.shortcode() {
             return emoji::lookup(shortcode)
                 .map(|entry| entry.symbol.to_owned())
@@ -184,6 +276,7 @@ impl Composer {
     pub fn replace_preedit(&mut self, candidate: &str) {
         self.insert_committed(candidate);
         self.reading.clear();
+        self.conversion = None;
     }
 
     fn insert_committed(&mut self, text: &str) {

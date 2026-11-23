@@ -6,6 +6,7 @@ use eframe::egui::{
 };
 use std::sync::Arc;
 use vime::{
+    i18n::tr,
     ime::{Language, hangul_key_label, search_emoji},
     output::CHAT_LIMIT,
     settings::Destination,
@@ -15,6 +16,8 @@ pub const SIZE: [u32; 2] = [860, 424];
 pub const ASPECT: f32 = SIZE[0] as f32 / SIZE[1] as f32;
 pub const EMOJI_PAGE_SIZE: usize = 40;
 pub const CANDIDATE_PAGE_SIZE: usize = 7;
+/// Fewer candidates fit next to the clause arrows while converting.
+pub const CONVERSION_PAGE_SIZE: usize = 5;
 
 const INK: Color32 = Color32::from_rgb(241, 245, 251);
 const SECONDARY: Color32 = Color32::from_rgb(183, 199, 217);
@@ -27,8 +30,17 @@ pub fn show(
     width: f32,
     destination: Destination,
     caret_visible: bool,
-) -> Option<Action> {
+) -> Interaction {
     draw(ui, keyboard, width, destination, false, caret_visible).0
+}
+
+/// What the pointer did to the keyboard during one frame.
+#[derive(Default)]
+pub struct Interaction {
+    /// A key that was clicked.
+    pub action: Option<Action>,
+    /// The key that is held down, if it repeats while held.
+    pub held: Option<Action>,
 }
 
 pub fn show_vr(
@@ -84,7 +96,7 @@ fn draw(
     destination: Destination,
     controller_input: bool,
     caret_visible: bool,
-) -> (Option<Action>, VrKeys) {
+) -> (Interaction, VrKeys) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, width / ASPECT), Sense::hover());
     let scale = rect.width() / SIZE[0] as f32;
     let mut view = Board {
@@ -92,6 +104,7 @@ fn draw(
         rect,
         scale,
         action: None,
+        held: None,
         controller_input,
         keys: Vec::new(),
         editor: None,
@@ -106,7 +119,10 @@ fn draw(
         view.keys(keyboard, destination);
     }
     (
-        view.action,
+        Interaction {
+            action: view.action,
+            held: view.held,
+        },
         VrKeys {
             rect,
             keys: view.keys,
@@ -120,6 +136,7 @@ struct Board<'a> {
     rect: Rect,
     scale: f32,
     action: Option<Action>,
+    held: Option<Action>,
     controller_input: bool,
     keys: Vec<(Rect, Action)>,
     editor: Option<EditorHit>,
@@ -198,7 +215,7 @@ impl Board<'_> {
         }
         self.button(
             self.box_at(if can_close { 664. } else { 746. }, 15., 91., 40.),
-            "絵文字",
+            tr("絵文字"),
             16.,
             if keyboard.emoji {
                 Face::Selected
@@ -210,7 +227,7 @@ impl Board<'_> {
         if can_close {
             self.button(
                 self.box_at(766., 15., 71., 40.),
-                "閉じる",
+                tr("閉じる"),
                 16.,
                 Face::Key,
                 Action::Close,
@@ -233,14 +250,22 @@ impl Board<'_> {
         let mut job = LayoutJob::default();
         let font = FontId::proportional(24. * self.scale);
         job.append(before, 0., TextFormat::simple(font.clone(), INK));
-        job.append(
-            &preedit,
-            0.,
-            TextFormat {
-                underline: Stroke::new(1.5 * self.scale, ACCENT),
-                ..TextFormat::simple(font.clone(), ACCENT)
-            },
-        );
+        for (text, focused) in keyboard.composer.preedit_segments() {
+            // The clause being converted is highlighted like in a desktop IME.
+            let format = if focused {
+                TextFormat {
+                    background: Color32::from_rgba_unmultiplied(111, 181, 237, 96),
+                    underline: Stroke::new(2.5 * self.scale, ACCENT),
+                    ..TextFormat::simple(font.clone(), INK)
+                }
+            } else {
+                TextFormat {
+                    underline: Stroke::new(1.5 * self.scale, ACCENT),
+                    ..TextFormat::simple(font.clone(), ACCENT)
+                }
+            };
+            job.append(&text, 0., format);
+        }
         job.append(after, 0., TextFormat::simple(font.clone(), INK));
         let text_area = self.box_at(36., 70., 657., 38.);
         let text_painter = painter.with_clip_rect(text_area);
@@ -259,7 +284,7 @@ impl Board<'_> {
             self.label(
                 text_area.translate(Vec2::new(7. * self.scale, 0.)),
                 Align2::LEFT_CENTER,
-                "メッセージを入力",
+                tr("メッセージを入力"),
                 24.,
                 SECONDARY,
             );
@@ -328,12 +353,16 @@ impl Board<'_> {
         }
         let route = match destination {
             Destination::Osc => "VRChat Chatbox",
-            Destination::SteamVrInput => "VRアプリの入力欄",
+            Destination::SteamVrInput => tr("VRアプリの入力欄"),
         };
-        let help = if keyboard.composer.has_preedit() {
-            "Enterで確定"
+        let help = if keyboard.composer.converting() {
+            tr("Spaceで次の候補 · Enterで確定")
+        } else if keyboard.can_convert() {
+            tr("Spaceで変換 · Enterで確定")
+        } else if keyboard.composer.has_preedit() {
+            tr("Enterで確定")
         } else {
-            "Enterで送信"
+            tr("Enterで送信")
         };
         let detail = if keyboard.status.is_empty() {
             format!("{route}  ·  {help}")
@@ -353,7 +382,7 @@ impl Board<'_> {
         );
         self.button(
             self.box_at(720., 77., 104., 39.),
-            "全消去",
+            tr("全消去"),
             15.,
             if empty { Face::Disabled } else { Face::Key },
             Action::Clear,
@@ -365,12 +394,14 @@ impl Board<'_> {
         if values.is_empty() {
             let hint = match keyboard.composer.language() {
                 Language::Japanese if keyboard.direct_input() => {
-                    "半角英数字 · 半角/全角で日本語入力に切り替え"
+                    tr("半角英数字 · 半角/全角で日本語入力に切り替え")
                 }
-                Language::Japanese => "ローマ字で入力 · 半角/全角で半角英数字に切り替え",
-                Language::English => "絵文字は一覧または :cat: などの短縮名から選択",
-                Language::Korean if keyboard.direct_input() => "英数字 · 한/영でハングルに切り替え",
-                Language::Korean => "2ボル式で入力 · 한/영で英数字に切り替え",
+                Language::Japanese => tr("ローマ字で入力 · 半角/全角で半角英数字に切り替え"),
+                Language::English => tr("絵文字は一覧または :cat: などの短縮名から選択"),
+                Language::Korean if keyboard.direct_input() => {
+                    tr("英数字 · 한/영でハングルに切り替え")
+                }
+                Language::Korean => tr("2ボル式で入力 · 한/영で英数字に切り替え"),
             };
             self.label(
                 self.box_at(24., 141., 660., 36.),
@@ -382,8 +413,31 @@ impl Board<'_> {
             return;
         }
         let mut x = 22.;
-        let first = keyboard.candidate_page * CANDIDATE_PAGE_SIZE;
-        for value in values.iter().skip(first).take(CANDIDATE_PAGE_SIZE) {
+        if let Some(conversion) = keyboard.composer.conversion() {
+            // Clause navigation, like the arrow keys of a desktop IME.
+            let last = conversion.segments().len() - 1;
+            for (label, step, enabled) in [
+                ("←", -1, conversion.focus() > 0),
+                ("→", 1, conversion.focus() < last),
+            ] {
+                self.button(
+                    self.box_at(x, 141., 40., 36.),
+                    label,
+                    19.,
+                    if enabled {
+                        Face::Subtle
+                    } else {
+                        Face::Disabled
+                    },
+                    Action::MoveSegment(step),
+                );
+                x += 46.;
+            }
+            x += 6.;
+        }
+        let page_size = keyboard.page_size();
+        let first = keyboard.candidate_page * page_size;
+        for (index, value) in values.iter().enumerate().skip(first).take(page_size) {
             let measured = self
                 .ui
                 .painter()
@@ -395,12 +449,16 @@ impl Board<'_> {
                 self.box_at(x, 141., width, 36.),
                 value,
                 17.,
-                Face::Key,
+                if keyboard.candidate_selected == Some(index) {
+                    Face::Selected
+                } else {
+                    Face::Key
+                },
                 Action::Candidate(value.clone()),
             );
             x += width + 7.;
         }
-        if values.len() > CANDIDATE_PAGE_SIZE {
+        if values.len() > page_size {
             self.button(
                 self.box_at(799., 141., 38., 36.),
                 "›",
@@ -551,9 +609,7 @@ impl Board<'_> {
     fn jis_keys(&mut self, keyboard: &Keyboard, has_text: bool, enter: Face) {
         let shift = keyboard.shift;
         let direct = keyboard.direct_input();
-        let composing = !keyboard.composer.preedit().is_empty();
         let shift_face = if shift { Face::Selected } else { Face::Key };
-        let commit_face = if composing { Face::Key } else { Face::Disabled };
 
         self.button(
             self.jis_rect(0, 0., 1.),
@@ -579,8 +635,9 @@ impl Board<'_> {
             Action::Backspace,
         );
 
-        // Tab occupies the empty 1.5u before Q. The two-row Enter shares the
-        // final 1.5u of this row and the final 1.25u of the row below.
+        // Tab and Caps Lock occupy the empty space before Q and A. The two-row
+        // Enter shares the final 1.5u of this row and the final 1.25u of the row
+        // below.
         self.jis_chars(
             1,
             1.5,
@@ -589,13 +646,6 @@ impl Board<'_> {
             } else {
                 "qwertyuiop@["
             },
-        );
-        self.button(
-            self.jis_rect(2, 0., 1.75),
-            "英数",
-            15.,
-            if direct { Face::Selected } else { Face::Key },
-            Action::SetDirect(true),
         );
         self.jis_chars(
             2,
@@ -624,37 +674,20 @@ impl Board<'_> {
             Action::Shift,
         );
 
+        // Space converts the reading and then cycles the candidates.
+        let space = if keyboard.composer.converting() {
+            tr("次の候補")
+        } else if keyboard.can_convert() {
+            tr("変換")
+        } else {
+            tr("スペース")
+        };
         self.button(
-            self.jis_rect(4, 3.75, 1.25),
-            "無変換",
-            13.,
-            commit_face,
-            Action::Commit,
-        );
-        self.button(
-            self.jis_rect(4, 5., 2.5),
-            "スペース",
+            self.jis_rect(4, 3.75, 6.25),
+            space,
             16.,
             Face::Key,
             Action::Space,
-        );
-        self.button(
-            self.jis_rect(4, 7.5, 1.25),
-            "変換",
-            14.,
-            if keyboard.candidates.is_empty() {
-                Face::Disabled
-            } else {
-                Face::Key
-            },
-            Action::ConvertJapanese,
-        );
-        self.button(
-            self.jis_rect(4, 8.75, 1.25),
-            "かな",
-            14.,
-            if direct { Face::Key } else { Face::Selected },
-            Action::SetDirect(false),
         );
     }
 
@@ -668,13 +701,11 @@ impl Board<'_> {
             self.button_interaction(bottom, "Enter", enabled, Action::Enter);
         let (fill, border, text) =
             face.colors(top_hover || bottom_hover, top_press || bottom_press);
-        let painter = self.ui.painter();
-        let mut mesh = Mesh::default();
-        mesh.add_colored_rect(top, fill);
-        mesh.add_colored_rect(bottom, fill);
-        painter.add(Shape::mesh(mesh));
-        painter.add(Shape::closed_line(
-            vec![
+        // One L-shaped outline with every corner rounded like the other keys.
+        // The shape is star-shaped around a point in the overlap of both parts,
+        // so a triangle fan fills it without seams between semi-transparent parts.
+        let outline = rounded_outline(
+            &[
                 top.left_top(),
                 top.right_top(),
                 bottom.right_bottom(),
@@ -682,8 +713,21 @@ impl Board<'_> {
                 bottom.left_top(),
                 top.left_bottom(),
             ],
-            Stroke::new(self.scale, border),
-        ));
+            8. * self.scale,
+        );
+        let center = Pos2::new(bottom.center().x, top.center().y);
+        let mut mesh = Mesh::default();
+        mesh.colored_vertex(center, fill);
+        for point in &outline {
+            mesh.colored_vertex(*point, fill);
+        }
+        let count = outline.len() as u32;
+        for index in 0..count {
+            mesh.add_triangle(0, index + 1, (index + 1) % count + 1);
+        }
+        let painter = self.ui.painter();
+        painter.add(Shape::mesh(mesh));
+        painter.add(Shape::closed_line(outline, Stroke::new(1., border)));
         self.label(
             bottom.shrink(3. * self.scale),
             Align2::CENTER_CENTER,
@@ -717,7 +761,7 @@ impl Board<'_> {
         self.label(
             self.box_at(24., 364., 220., 38.),
             Align2::LEFT_CENTER,
-            "絵文字・記号",
+            tr("絵文字・記号"),
             15.,
             SECONDARY,
         );
@@ -764,10 +808,11 @@ impl Board<'_> {
             }
             (false, false)
         } else {
+            // The label is not part of the id: a held key keeps its identity when
+            // its label changes, such as Space switching to the candidate cycle.
             let id = self.ui.scope_id().with((
                 (rect.left() - self.rect.left()) as i32,
                 (rect.top() - self.rect.top()) as i32,
-                label,
             ));
             let response = self.ui.interact(
                 rect,
@@ -784,6 +829,9 @@ impl Board<'_> {
                 response
             };
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+            if enabled && action.repeats() && response.is_pointer_button_down_on() {
+                self.held = Some(action.clone());
+            }
             if response.clicked() {
                 self.action = Some(action);
             }
@@ -914,6 +962,36 @@ impl EditorHit {
     fn action(&self, position: Pos2) -> Action {
         Action::MoveCaret(self.galley.cursor_from_pos(position - self.origin).index.0)
     }
+}
+
+/// Rounds every corner of a polygon whose corners are right angles. A corner
+/// next to a short edge gets a smaller radius so neighbouring arcs never overlap.
+fn rounded_outline(corners: &[Pos2], radius: f32) -> Vec<Pos2> {
+    use std::f32::consts::{PI, TAU};
+    const STEPS: usize = 6;
+    let mut outline = Vec::with_capacity(corners.len() * (STEPS + 1));
+    for (index, &corner) in corners.iter().enumerate() {
+        let before = corners[(index + corners.len() - 1) % corners.len()] - corner;
+        let after = corners[(index + 1) % corners.len()] - corner;
+        let radius = radius.min(before.length() / 2.).min(after.length() / 2.);
+        let (before, after) = (before.normalized(), after.normalized());
+        // For a right angle the arc's center is one radius away from both edges.
+        let center = corner + (before + after) * radius;
+        let first = (corner + before * radius - center).angle();
+        let last = (corner + after * radius - center).angle();
+        let mut sweep = last - first;
+        while sweep > PI {
+            sweep -= TAU;
+        }
+        while sweep < -PI {
+            sweep += TAU;
+        }
+        for step in 0..=STEPS {
+            let angle = first + sweep * step as f32 / STEPS as f32;
+            outline.push(center + radius * Vec2::angled(angle));
+        }
+    }
+    outline
 }
 
 fn gradient(painter: &Painter, rect: Rect, radius: f32) {

@@ -1,3 +1,4 @@
+use crate::i18n::{tr, tr_args};
 use std::{
     io,
     net::{Ipv4Addr, SocketAddrV4, UdpSocket},
@@ -10,13 +11,13 @@ pub fn chat_packet(text: &str, notify: bool) -> io::Result<Vec<u8>> {
     if text.trim().is_empty() || text.contains('\0') {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "送信する文章を入力してください",
+            tr("送信する文章を入力してください"),
         ));
     }
     if text.encode_utf16().count() > CHAT_LIMIT || text.lines().count() > 9 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "VRChat の上限は144文字・9行です",
+            tr("VRChat の上限は144文字・9行です"),
         ));
     }
     let mut packet = Vec::new();
@@ -51,16 +52,16 @@ pub fn send_scene_input(scene_pid: u32, text: &str) -> io::Result<()> {
     if text.trim().is_empty() || text.contains('\0') {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "送信する文章を入力してください",
+            tr("送信する文章を入力してください"),
         ));
     }
     let mut foreground_pid = 0;
     // Only insert while the current SteamVR scene owns the foreground window.
     unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground_pid) };
     if scene_pid == 0 || scene_pid != foreground_pid {
-        return Err(io::Error::other(
+        return Err(io::Error::other(tr(
             "VRアプリの入力欄を開き、Windowsでそのアプリを前面にしてください",
-        ));
+        )));
     }
     let keys: Vec<_> = text
         .encode_utf16()
@@ -79,9 +80,9 @@ pub fn send_scene_input(scene_pid: u32, text: &str) -> io::Result<()> {
         .collect();
     let sent = unsafe { SendInput(keys.len() as u32, keys.as_ptr(), size_of::<INPUT>() as i32) };
     if sent != keys.len() as u32 {
-        return Err(io::Error::other(format!(
-            "Windows が入力イベントを受け取れませんでした ({sent}/{})",
-            keys.len()
+        return Err(io::Error::other(tr_args(
+            "Windows が入力イベントを受け取れませんでした ({0}/{1})",
+            &[&sent.to_string(), &keys.len().to_string()],
         )));
     }
     Ok(())

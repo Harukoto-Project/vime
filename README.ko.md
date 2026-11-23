@@ -15,7 +15,9 @@ SteamVR용 가상 IME 키보드입니다. VRChat에서 일본어, 영어, 한국
 
 ## 설치
 
-Windows x64, Rust 1.95 이상, MSVC C++ Build Tools가 필요합니다. VR에서 사용하려면 SteamVR을 설치하세요.
+배포용 zip(`ViME-0.1.0-windows-x64.zip`)은 압축을 풀고 `vime.exe`를 실행하면 됩니다. Rust나 빌드 도구는 필요 없고, Windows x64와 SteamVR만 있으면 됩니다.
+
+소스에서 빌드하려면 Windows x64, Rust 1.95 이상, MSVC C++ Build Tools가 필요합니다. VR에서 사용하려면 SteamVR을 설치하세요.
 
 ```powershell
 cargo run --release --locked
