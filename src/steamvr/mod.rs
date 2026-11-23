@@ -4,7 +4,7 @@ mod geometry;
 
 use abi::{
     ActionPose, ActionSet, Applications, Digital, Event, Input, Matrix, Overlay, Pose, System,
-    Texture, TextureBounds,
+    Texture,
 };
 use libloading::Library;
 use std::{
@@ -271,16 +271,6 @@ impl SteamVr {
     }
 
     fn configure_texture(&self, handle: u64) -> Result<()> {
-        let bounds = TextureBounds {
-            u_min: 0.,
-            v_min: 1.,
-            u_max: 1.,
-            v_max: 0.,
-        };
-        checked(
-            self.overlay.texture_bounds(handle, &bounds),
-            "VR テクスチャの向きを設定",
-        )?;
         checked(
             self.overlay.flag(handle, abi::PREMULTIPLIED_ALPHA, true),
             "VR テクスチャの透過を設定",

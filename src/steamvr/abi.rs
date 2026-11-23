@@ -76,14 +76,6 @@ pub struct Texture {
 }
 
 #[repr(C)]
-pub struct TextureBounds {
-    pub u_min: f32,
-    pub v_min: f32,
-    pub u_max: f32,
-    pub v_max: f32,
-}
-
-#[repr(C)]
 #[derive(Default)]
 pub struct Event {
     pub kind: u32,
@@ -144,7 +136,6 @@ table!(Overlay {
     destroy: 2(handle: u64) -> i32;
     flag: 10(handle: u64, flag: i32, enabled: bool) -> i32;
     set_width: 21(handle: u64, width: f32) -> i32;
-    texture_bounds: 29(handle: u64, bounds: *const TextureBounds) -> i32;
     set_transform: 32(handle: u64, origin: i32, matrix: *const Matrix) -> i32;
     show: 43(handle: u64) -> i32;
     hide: 44(handle: u64) -> i32;
