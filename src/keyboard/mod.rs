@@ -1,10 +1,10 @@
 mod microsoft_ime;
 mod view;
 
-use microsoft_ime::MicrosoftIme;
+use microsoft_ime::Lookup;
 use vime::ime::{Composer, Language};
 
-pub use view::{ASPECT, SIZE, show, show_vr};
+pub use view::{ASPECT, SIZE, VrKeys, show, show_vr};
 
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -16,6 +16,7 @@ pub enum Action {
     Commit,
     Space,
     Shift,
+    ToggleJapaneseWidth,
     ToggleEmoji,
     PageEmoji(i32),
     PageCandidates,
@@ -27,27 +28,29 @@ pub enum Action {
 pub struct Keyboard {
     pub composer: Composer,
     pub shift: bool,
+    japanese_direct: bool,
     pub emoji: bool,
     pub emoji_page: usize,
     pub candidate_page: usize,
     pub candidates: Vec<String>,
     pub status: String,
     pub revision: u64,
-    ime: Option<MicrosoftIme>,
+    ime: Lookup,
 }
 
 impl Keyboard {
-    pub fn new() -> Self {
+    pub fn new(context: eframe::egui::Context) -> Self {
         Self {
             composer: Composer::default(),
             shift: false,
+            japanese_direct: false,
             emoji: false,
             emoji_page: 0,
             candidate_page: 0,
             candidates: Vec::new(),
             status: String::new(),
             revision: 0,
-            ime: MicrosoftIme::open().ok(),
+            ime: Lookup::start(context),
         }
     }
 
@@ -62,6 +65,10 @@ impl Keyboard {
         self.candidate_page = 0;
     }
 
+    pub fn japanese_direct(&self) -> bool {
+        self.composer.language() == Language::Japanese && self.japanese_direct
+    }
+
     pub fn apply(&mut self, action: Action) {
         let before = self.composer.reading();
         let editing = matches!(
@@ -72,12 +79,17 @@ impl Keyboard {
                 | Action::Candidate(_)
                 | Action::Backspace
                 | Action::Commit
+                | Action::ToggleJapaneseWidth
                 | Action::Space
                 | Action::Clear
         );
         match action {
             Action::Key(key) if self.composer.text().chars().count() < 512 => {
-                self.composer.key(key);
+                if self.japanese_direct() {
+                    self.composer.insert(&key.to_string());
+                } else {
+                    self.composer.key(key);
+                }
                 self.shift = false;
             }
             Action::Insert(text) if self.composer.text().chars().count() < 512 => {
@@ -94,6 +106,11 @@ impl Keyboard {
             Action::Commit => self.composer.commit(),
             Action::Space => self.composer.insert(" "),
             Action::Shift => self.shift = !self.shift,
+            Action::ToggleJapaneseWidth => {
+                self.composer.commit();
+                self.japanese_direct = !self.japanese_direct;
+                self.shift = false;
+            }
             Action::ToggleEmoji => self.emoji = !self.emoji,
             Action::PageEmoji(step) => {
                 let pages = vime::ime::search_emoji("")
@@ -121,16 +138,27 @@ impl Keyboard {
 
     fn refresh_candidates(&mut self, reading: &str) {
         self.candidates = self.composer.candidates();
-        if self.composer.language() == Language::Japanese
-            && let Some(ime) = &self.ime
-        {
-            let native = ime.candidates(reading);
-            for candidate in native.into_iter().rev() {
-                if !self.candidates.contains(&candidate) {
-                    self.candidates.insert(0, candidate);
-                }
-            }
+        if self.composer.language() == Language::Japanese && !self.japanese_direct() {
+            self.ime.request(reading);
         }
         self.candidate_page = 0;
+    }
+
+    pub fn poll_candidates(&mut self) {
+        let Some((reading, candidates)) = self.ime.latest() else {
+            return;
+        };
+        if self.composer.language() != Language::Japanese
+            || self.japanese_direct()
+            || self.composer.reading() != reading
+        {
+            return;
+        }
+        for candidate in candidates.into_iter().rev() {
+            if !self.candidates.contains(&candidate) {
+                self.candidates.insert(0, candidate);
+                self.revision = self.revision.wrapping_add(1);
+            }
+        }
     }
 }

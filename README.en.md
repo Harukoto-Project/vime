@@ -8,7 +8,7 @@ A virtual keyboard with IME for SteamVR. Type in Japanese, English, and Korean i
 
 ## Features
 
-- **Japanese** converts romaji to hiragana and offers katakana and kanji candidates. More candidates are available when Microsoft IME is installed.
+- **Japanese** uses a JIS layout, converts romaji to hiragana, and offers katakana and kanji candidates. **半角/全角** switches to direct half-width input while keeping the JIS layout. More candidates are available when Microsoft IME is installed.
 - **English** uses QWERTY. **Korean** composes Hangul with the Dubeolsik layout. Pick emoji, kaomoji, and symbols from the palette, or look them up with readings in Japanese and Korean and shortcodes such as `:cat:` in English.
 - **Windows settings** cover the output route, OSC port and sound, toggle shortcut, and keyboard width in VR. The keyboard preview works before connecting to SteamVR.
 - The **ViME** tab in the SteamVR dashboard offers the keyboard, output settings, and controller bindings.

@@ -1,7 +1,7 @@
 use crate::{
     dashboard::{self, Command, Dashboard, Page},
     hotkeys::Hotkeys,
-    keyboard::{self, Action, Keyboard},
+    keyboard::{self, Action, Keyboard, VrKeys},
     overlay_surface::OverlaySurface,
 };
 use eframe::egui::{
@@ -12,7 +12,7 @@ use std::{env, fs, path::PathBuf, sync::Arc, time::Duration};
 use vime::{
     output,
     settings::{Destination, Settings},
-    steamvr::{Pointer, SteamVr, Surface},
+    steamvr::{SteamVr, Surface},
 };
 
 const BACKGROUND: Color32 = Color32::from_rgb(20, 26, 35);
@@ -30,6 +30,10 @@ pub fn run() -> eframe::Result {
             .with_min_inner_size([670., 560.])
             .with_app_id("org.harukoto.vime"),
         renderer: eframe::Renderer::Glow,
+        glow_options: egui_glow::GlowConfiguration {
+            vsync: false,
+            ..Default::default()
+        },
         ..Default::default()
     };
     eframe::run_native(
@@ -50,9 +54,9 @@ struct App {
     auto_connect: bool,
     page: Page,
     dashboard: Dashboard,
-    pointers: [Option<Pointer>; 2],
-    world_presses: Vec<[f32; 2]>,
-    last_world: Option<(u64, Destination, [Option<Pointer>; 2])>,
+    world_keys: Option<VrKeys>,
+    pending_world_keys: Option<VrKeys>,
+    last_world: Option<(u64, Destination)>,
     dashboard_revision: Option<u64>,
     draw_errors: [Option<String>; 2],
     steamvr_message: String,
@@ -118,14 +122,14 @@ impl App {
             draft: settings.clone(),
             settings,
             hotkeys,
-            keyboard: Keyboard::new(),
+            keyboard: Keyboard::new(creation.egui_ctx.clone()),
             surfaces,
             vr: None,
             auto_connect: true,
             page: Page::default(),
             dashboard: Dashboard::default(),
-            pointers: [None; 2],
-            world_presses: Vec::new(),
+            world_keys: None,
+            pending_world_keys: None,
             last_world: None,
             dashboard_revision: None,
             draw_errors: [None, None],
@@ -192,16 +196,16 @@ impl App {
         if let Ok(surfaces) = &mut self.surfaces {
             surfaces.keyboard.reset();
         }
-        self.pointers = [None; 2];
-        self.world_presses.clear();
+        self.world_keys = None;
+        self.pending_world_keys = None;
         self.last_world = None;
         self.draw_errors[0] = None;
     }
 
     fn disconnect(&mut self) {
         self.vr = None;
-        self.pointers = [None; 2];
-        self.world_presses.clear();
+        self.world_keys = None;
+        self.pending_world_keys = None;
         self.last_world = None;
         self.dashboard.reset();
         self.draw_errors = [None, None];
@@ -261,34 +265,21 @@ impl App {
         let (Some(vr), Ok(surfaces)) = (&mut self.vr, &mut self.surfaces) else {
             return;
         };
-        let mut world_actions = Vec::new();
         if vr.visible() {
-            let pointers = self.pointers.map(|pointer| {
-                pointer.map(|mut pointer| {
-                    for (coordinate, size) in pointer.uv.iter_mut().zip(keyboard::SIZE) {
-                        *coordinate = (*coordinate * size as f32).round() / size as f32;
-                    }
-                    pointer
-                })
-            });
-            let frame = (self.keyboard.revision, self.settings.destination, pointers);
-            if self.last_world != Some(frame) || !self.world_presses.is_empty() {
-                let presses = std::mem::take(&mut self.world_presses);
+            let frame = (self.keyboard.revision, self.settings.destination);
+            if self.last_world != Some(frame) {
                 self.last_world = Some(frame);
-                world_actions = surfaces.keyboard.render(Vec::new(), |ui| {
-                    keyboard::show_vr(
-                        ui,
-                        &self.keyboard,
-                        self.settings.destination,
-                        pointers,
-                        &presses,
-                    )
-                });
+                self.pending_world_keys = Some(surfaces.keyboard.render(Vec::new(), |ui| {
+                    keyboard::show_vr(ui, &self.keyboard, self.settings.destination)
+                }));
             }
             if let Some(result) = surfaces
                 .keyboard
                 .present(|texture| vr.present(Surface::Keyboard, texture))
             {
+                if result.is_ok() {
+                    self.world_keys = self.pending_world_keys.take();
+                }
                 self.draw_errors[0] = result.err();
             }
         }
@@ -325,8 +316,15 @@ impl App {
             Some(Command::SaveSettings) => self.save_draft(),
             None => {}
         }
+    }
+
+    fn world_key_presses(&mut self, presses: [Option<[f32; 2]>; 2]) {
+        let Some(keys) = &self.world_keys else {
+            return;
+        };
+        let actions = presses.map(|point| point.and_then(|point| keys.action_at(point)));
         let mut sent = false;
-        for action in world_actions {
+        for action in actions.into_iter().flatten() {
             if matches!(action, Action::Send) && std::mem::replace(&mut sent, true) {
                 continue;
             }
@@ -501,6 +499,7 @@ impl App {
 
 impl eframe::App for App {
     fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        self.keyboard.poll_candidates();
         if std::mem::take(&mut self.auto_connect) {
             self.connect();
         }
@@ -509,14 +508,6 @@ impl eframe::App for App {
         }
         if let Some(vr) = &mut self.vr {
             let frame = vr.poll(keyboard::ASPECT);
-            if let Some(keyboard) = frame.keyboard {
-                self.pointers = keyboard.pointers;
-                self.world_presses
-                    .extend(keyboard.presses.into_iter().flatten());
-            } else {
-                self.pointers = [None; 2];
-                self.world_presses.clear();
-            }
             if frame.quit {
                 self.disconnect();
                 self.steamvr_message = "SteamVR との接続が終了しました".into();
@@ -525,21 +516,37 @@ impl eframe::App for App {
                     .feed(frame.dashboard_active, frame.dashboard_events);
                 if frame.toggle {
                     self.toggle();
+                } else {
+                    self.world_key_presses(frame.keyboard_presses);
                 }
             }
         }
         if let Some(vr) = &self.vr {
             let visible = vr.visible() || self.dashboard.active;
-            let pending_dashboard = self.dashboard.redraw || self.draw_errors[1].is_some();
-            if visible || pending_dashboard {
+            let keyboard_changed = vr.visible()
+                && (self.last_world != Some((self.keyboard.revision, self.settings.destination))
+                    || self.draw_errors[0].is_some());
+            let dashboard_changed = self.dashboard.redraw
+                || self.draw_errors[1].is_some()
+                || (self.dashboard.active
+                    && self.dashboard_revision != Some(self.keyboard.revision));
+            if keyboard_changed || dashboard_changed {
                 context.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
             }
-            context.request_repaint_after(Duration::from_millis(if visible { 16 } else { 33 }));
+            // Poll VR independently of the desktop monitor's refresh rate.
+            context.request_repaint_after(Duration::from_micros(if visible {
+                11_111
+            } else {
+                33_333
+            }));
         }
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.paint_overlay();
+        if ui.input(|input| input.viewport().minimized == Some(true)) {
+            return;
+        }
         // The root ui is rebuilt by eframe, including after a hidden-window VR frame.
         Frame::new()
             .fill(BACKGROUND)

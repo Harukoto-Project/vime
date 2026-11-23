@@ -1,7 +1,42 @@
 use super::abi::Matrix;
+use std::time::Instant;
 
 const DISTANCE: f32 = 1.05;
 const DROP: f32 = 0.12;
+
+#[derive(Default)]
+pub struct PointerFilter(Option<([f32; 2], Instant)>);
+
+impl PointerFilter {
+    pub fn update(&mut self, uv: [f32; 2], now: Instant, aspect: f32) -> [f32; 2] {
+        let filtered = if let Some((previous, time)) = self.0 {
+            let elapsed = now.duration_since(time).as_secs_f32();
+            let dx = uv[0] - previous[0];
+            let dy = uv[1] - previous[1];
+            // Small movements are damped. Larger movements follow the controller faster.
+            let travel = dx.hypot(dy / aspect);
+            let response = 0.024 - 0.018 * (travel / 0.04).min(1.);
+            let blend = 1. - (-elapsed / response).exp();
+            [previous[0] + dx * blend, previous[1] + dy * blend]
+        } else {
+            uv
+        };
+        self.0 = Some((filtered, now));
+        filtered
+    }
+
+    pub fn reset(&mut self) {
+        self.0 = None;
+    }
+}
+
+pub fn cursor_transform(uv: [f32; 2], width: f32, aspect: f32) -> Matrix {
+    Matrix([
+        [1., 0., 0., (uv[0] - 0.5) * width],
+        [0., 1., 0., (0.5 - uv[1]) * width / aspect],
+        [0., 0., 1., 0.002],
+    ])
+}
 
 pub fn anchor(head: &Matrix) -> Matrix {
     // Apply the offset in headset space so pitch, yaw and roll are all respected.

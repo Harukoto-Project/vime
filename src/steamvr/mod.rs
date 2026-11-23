@@ -1,5 +1,6 @@
 mod abi;
 mod actions;
+mod cursor;
 mod geometry;
 
 use abi::{
@@ -11,26 +12,22 @@ use std::{
     ffi::{CStr, CString, c_void},
     path::Path,
     sync::{Mutex, MutexGuard},
+    time::Instant,
 };
 
 type Result<T> = std::result::Result<T, String>;
 static RUNTIME_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Copy, Default, PartialEq)]
-pub struct Pointer {
+struct Pointer {
     pub uv: [f32; 2],
     pub down: bool,
-}
-
-pub struct KeyboardInput {
-    pub pointers: [Option<Pointer>; 2],
-    pub presses: [Option<[f32; 2]>; 2],
 }
 
 #[derive(Default)]
 pub struct Frame {
     pub toggle: bool,
-    pub keyboard: Option<KeyboardInput>,
+    pub keyboard_presses: [Option<[f32; 2]>; 2],
     pub dashboard_active: bool,
     pub dashboard_events: Vec<DashboardEvent>,
     pub quit: bool,
@@ -113,6 +110,8 @@ pub struct SteamVr {
     applications: Applications,
     handle: u64,
     dashboard: u64,
+    cursors: [cursor::Cursor; 2],
+    pointer_filters: [geometry::PointerFilter; 2],
     toggle_set: u64,
     pointer_set: u64,
     toggle_action: u64,
@@ -202,6 +201,8 @@ impl SteamVr {
             applications,
             handle,
             dashboard: 0,
+            cursors: Default::default(),
+            pointer_filters: Default::default(),
             toggle_set,
             pointer_set,
             toggle_action,
@@ -216,6 +217,16 @@ impl SteamVr {
         };
         session.configure_texture(handle)?;
         session.create_dashboard(dashboard_size)?;
+        session.cursors[0].initialize(
+            &session.overlay,
+            c"org.harukoto.vime.cursor.left",
+            [215, 194, 255, 255],
+        )?;
+        session.cursors[1].initialize(
+            &session.overlay,
+            c"org.harukoto.vime.cursor.right",
+            [159, 211, 255, 255],
+        )?;
         Ok(session)
     }
 
@@ -326,7 +337,7 @@ impl SteamVr {
             self.world_shown = false;
         }
         self.panel = None;
-        self.armed = [false; 2];
+        self.clear_pointers();
         Ok(())
     }
 
@@ -416,7 +427,7 @@ impl SteamVr {
             if pointing { 2 } else { 1 },
         ) != 0
         {
-            self.armed = [false; 2];
+            self.clear_pointers();
             return frame;
         }
 
@@ -424,17 +435,16 @@ impl SteamVr {
             && self
                 .digital(self.toggle_action, 0)
                 .is_some_and(|data| data.state && data.changed);
-        frame.keyboard = if let Some(panel) = self.panel.filter(|_| pointing) {
-            let (left, left_press) = self.pointer(0, &panel, aspect);
-            let (right, right_press) = self.pointer(1, &panel, aspect);
-            Some(KeyboardInput {
-                pointers: [left, right],
-                presses: [left_press, right_press],
-            })
+        if let Some(panel) = self.panel.filter(|_| pointing) {
+            let now = Instant::now();
+            for hand in 0..2 {
+                let (pointer, press) = self.pointer(hand, &panel, aspect, now);
+                self.cursors[hand].update(&self.overlay, self.handle, pointer, self.width, aspect);
+                frame.keyboard_presses[hand] = press;
+            }
         } else {
-            self.armed = [false; 2];
-            None
-        };
+            self.clear_pointers();
+        }
         frame.toggle = toggle;
         frame
     }
@@ -444,6 +454,7 @@ impl SteamVr {
         hand: usize,
         panel: &Matrix,
         aspect: f32,
+        now: Instant,
     ) -> (Option<Pointer>, Option<[f32; 2]>) {
         let source = self.hands[hand];
         let click = self.digital(self.click_action, source);
@@ -461,10 +472,23 @@ impl SteamVr {
             source,
         );
         if code != 0 || !pose.active || !pose.pose.valid {
+            self.pointer_filters[hand].reset();
             return (None, None);
         }
-        let uv = geometry::hit(panel, &pose.pose.transform, self.width, aspect);
-        (uv.map(|uv| Pointer { uv, down }), uv.filter(|_| pressed))
+        let Some(uv) = geometry::hit(panel, &pose.pose.transform, self.width, aspect) else {
+            self.pointer_filters[hand].reset();
+            return (None, None);
+        };
+        let uv = self.pointer_filters[hand].update(uv, now, aspect);
+        (Some(Pointer { uv, down }), pressed.then_some(uv))
+    }
+
+    fn clear_pointers(&mut self) {
+        self.armed = [false; 2];
+        for (cursor, filter) in self.cursors.iter_mut().zip(&mut self.pointer_filters) {
+            filter.reset();
+            cursor.update(&self.overlay, self.handle, None, self.width, 1.);
+        }
     }
 
     fn digital(&self, action: u64, device: u64) -> Option<Digital> {
@@ -479,6 +503,11 @@ impl SteamVr {
 impl Drop for SteamVr {
     fn drop(&mut self) {
         if !self.quitting {
+            for cursor in &self.cursors {
+                if cursor.handle != 0 {
+                    self.overlay.destroy(cursor.handle);
+                }
+            }
             if self.dashboard != 0 {
                 self.overlay.destroy(self.dashboard);
             }

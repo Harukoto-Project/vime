@@ -7,7 +7,6 @@ use vime::{
     ime::{Language, hangul_key_label, search_emoji},
     output::CHAT_LIMIT,
     settings::Destination,
-    steamvr::Pointer,
 };
 
 pub const SIZE: [u32; 2] = [860, 424];
@@ -26,59 +25,51 @@ pub fn show(
     width: f32,
     destination: Destination,
 ) -> Option<Action> {
-    draw(ui, keyboard, width, destination, None)
-        .into_iter()
-        .next()
+    draw(ui, keyboard, width, destination, false).0
 }
 
-pub fn show_vr(
-    ui: &mut Ui,
-    keyboard: &Keyboard,
-    destination: Destination,
-    pointers: [Option<Pointer>; 2],
-    presses: &[[f32; 2]],
-) -> Vec<Action> {
-    draw(
-        ui,
-        keyboard,
-        SIZE[0] as f32,
-        destination,
-        Some((pointers, presses)),
-    )
+pub fn show_vr(ui: &mut Ui, keyboard: &Keyboard, destination: Destination) -> VrKeys {
+    draw(ui, keyboard, SIZE[0] as f32, destination, true).1
 }
 
-type VrInput<'a> = ([Option<Pointer>; 2], &'a [[f32; 2]]);
+pub struct VrKeys {
+    rect: Rect,
+    keys: Vec<(Rect, Action)>,
+}
+
+impl VrKeys {
+    pub fn action_at(&self, [u, v]: [f32; 2]) -> Option<Action> {
+        let position = self.rect.min + Vec2::new(u * self.rect.width(), v * self.rect.height());
+        self.keys
+            .iter()
+            .filter(|(rect, _)| rect.expand(2.).contains(position))
+            .min_by(|(a, _), (b, _)| {
+                a.distance_sq_to_pos(position)
+                    .total_cmp(&b.distance_sq_to_pos(position))
+            })
+            .map(|(_, action)| action.clone())
+    }
+}
 
 fn draw(
     ui: &mut Ui,
     keyboard: &Keyboard,
     width: f32,
     destination: Destination,
-    vr: Option<VrInput<'_>>,
-) -> Vec<Action> {
+    controller_input: bool,
+) -> (Option<Action>, VrKeys) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, width / ASPECT), Sense::hover());
     let scale = rect.width() / SIZE[0] as f32;
-    let position = |[u, v]: [f32; 2]| rect.min + Vec2::new(u * rect.width(), v * rect.height());
-    let (pointers, presses) = vr.unwrap_or(([None; 2], &[]));
     let mut view = Board {
         ui,
         rect,
         scale,
         action: None,
-        controller_input: vr.is_some(),
-        pointers: pointers
-            .map(|pointer| pointer.map(|pointer| (position(pointer.uv), pointer.down))),
-        presses: presses
-            .iter()
-            .copied()
-            .map(|uv| Press {
-                position: position(uv),
-                target: None,
-            })
-            .collect(),
+        controller_input,
+        keys: Vec::new(),
     };
     view.background();
-    view.header(keyboard, vr.is_some());
+    view.header(keyboard, controller_input);
     view.editor(keyboard, destination);
     view.candidates(keyboard);
     if keyboard.emoji {
@@ -86,30 +77,13 @@ fn draw(
     } else {
         view.keys(keyboard, destination);
     }
-    for (pointer, color) in view
-        .pointers
-        .into_iter()
-        .zip([Color32::from_rgb(215, 194, 255), ACCENT])
-    {
-        if let Some((position, down)) = pointer {
-            let painter = view.ui.painter();
-            painter.circle_filled(position, 7.0, DARK_INK);
-            painter.circle_filled(position, if down { 5.0 } else { 3.5 }, color);
-        }
-    }
-    view.action
-        .into_iter()
-        .chain(
-            view.presses
-                .into_iter()
-                .filter_map(|press| press.target.map(|(_, action)| action)),
-        )
-        .collect()
-}
-
-struct Press {
-    position: Pos2,
-    target: Option<(f32, Action)>,
+    (
+        view.action,
+        VrKeys {
+            rect,
+            keys: view.keys,
+        },
+    )
 }
 
 struct Board<'a> {
@@ -118,8 +92,7 @@ struct Board<'a> {
     scale: f32,
     action: Option<Action>,
     controller_input: bool,
-    pointers: [Option<(Pos2, bool)>; 2],
-    presses: Vec<Press>,
+    keys: Vec<(Rect, Action)>,
 }
 
 #[derive(Clone, Copy)]
@@ -291,7 +264,10 @@ impl Board<'_> {
         let values = &keyboard.candidates;
         if values.is_empty() {
             let hint = match keyboard.composer.language() {
-                Language::Japanese => "ローマ字で入力し、候補を選んで変換",
+                Language::Japanese if keyboard.japanese_direct() => {
+                    "半角英数字 · 半角/全角で日本語入力に切り替え"
+                }
+                Language::Japanese => "ローマ字で入力 · 半角/全角で半角英数字に切り替え",
                 Language::English => "絵文字は一覧または :cat: などの短縮名から選択",
                 Language::Korean => "2ボル式で入力",
             };
@@ -341,19 +317,54 @@ impl Board<'_> {
         let has_text = !text.is_empty();
         let can_send = !text.trim().is_empty()
             && (destination != Destination::Osc || text.encode_utf16().count() <= CHAT_LIMIT);
-        let numbers = if shift {
-            "!@#$%^&*()_+"
-        } else {
-            "1234567890-="
+        let japanese = lang == Language::Japanese;
+        let numbers = match (japanese, shift) {
+            (true, false) => "1234567890-^¥",
+            (true, true) => "!\"#$%&'()0=~|",
+            (false, false) => "1234567890-=",
+            (false, true) => "!@#$%^&*()_+",
         };
+        let width_toggle = japanese.then(|| {
+            (
+                "半角/全角".to_owned(),
+                1.95,
+                Action::ToggleJapaneseWidth,
+                if keyboard.japanese_direct() {
+                    Face::Selected
+                } else {
+                    Face::Key
+                },
+            )
+        });
         self.row(
             188.,
-            numbers
-                .chars()
-                .map(|key| (key.to_string(), 1., Action::Key(key), Face::Key)),
+            width_toggle.into_iter().chain(
+                numbers
+                    .chars()
+                    .map(|key| (key.to_string(), 1., Action::Key(key), Face::Key)),
+            ),
         );
-        self.row(232., letters("qwertyuiop[]", "QWERTYUIOP{}", shift, lang));
-        let mut middle: Vec<_> = letters("asdfghjkl;'", "ASDFGHJKL:\"", shift, lang).collect();
+        let (top, top_shift, home, home_shift, bottom, bottom_shift) = if japanese {
+            (
+                "qwertyuiop@[",
+                "QWERTYUIOP`{",
+                "asdfghjkl;:]",
+                "ASDFGHJKL+*}",
+                "zxcvbnm,./\\",
+                "ZXCVBNM<>?_",
+            )
+        } else {
+            (
+                "qwertyuiop[]",
+                "QWERTYUIOP{}",
+                "asdfghjkl;'",
+                "ASDFGHJKL:\"",
+                "zxcvbnm,./",
+                "ZXCVBNM<>?",
+            )
+        };
+        self.row(232., letters(top, top_shift, shift, lang));
+        let mut middle: Vec<_> = letters(home, home_shift, shift, lang).collect();
         middle.push((
             "削除".to_owned(),
             1.4,
@@ -361,14 +372,15 @@ impl Board<'_> {
             if has_text { Face::Key } else { Face::Disabled },
         ));
         self.row(276., middle);
-        let lower = [(
+        let shift_key = (
             "Shift".to_owned(),
             1.45,
             Action::Shift,
             if shift { Face::Selected } else { Face::Key },
-        )]
-        .into_iter()
-        .chain(letters("zxcvbnm,./", "ZXCVBNM<>?", shift, lang));
+        );
+        let lower = std::iter::once(shift_key.clone())
+            .chain(letters(bottom, bottom_shift, shift, lang))
+            .chain(std::iter::once(shift_key));
         self.row(320., lower);
         self.row(
             364.,
@@ -489,35 +501,10 @@ impl Board<'_> {
     fn button(&mut self, rect: Rect, label: &str, size: f32, face: Face, action: Action) {
         let enabled = !matches!(face, Face::Disabled);
         let (hovered, pressed) = if self.controller_input {
-            // Prefer the key under the ray, with a small margin for controller jitter.
-            let hit = rect.expand(2. * self.scale);
             if enabled {
-                for press in self
-                    .presses
-                    .iter_mut()
-                    .filter(|press| hit.contains(press.position))
-                {
-                    let distance = rect.distance_sq_to_pos(press.position);
-                    if press
-                        .target
-                        .as_ref()
-                        .is_none_or(|(best, _)| distance < *best)
-                    {
-                        press.target = Some((distance, action.clone()));
-                    }
-                }
+                self.keys.push((rect, action));
             }
-            let hovered = self
-                .pointers
-                .iter()
-                .flatten()
-                .any(|&(pos, _)| rect.contains(pos));
-            let pressed = self
-                .pointers
-                .iter()
-                .flatten()
-                .any(|&(pos, down)| down && rect.contains(pos));
-            (enabled && hovered, enabled && pressed)
+            (false, false)
         } else {
             let id = self.ui.scope_id().with((
                 (rect.left() - self.rect.left()) as i32,

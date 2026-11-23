@@ -1,6 +1,19 @@
-// Longer syllables are checked before shorter ones.
+use std::sync::LazyLock;
+
+// Group by the first letter while preserving each group's longest-first order.
 const KANA: &str = include_str!("romaji.txt");
 const WORDS: &str = include_str!("words.tsv");
+type RomanSyllable = (&'static str, &'static str);
+static SYLLABLES: LazyLock<[Vec<RomanSyllable>; 26]> = LazyLock::new(|| {
+    let mut groups: [Vec<RomanSyllable>; 26] = Default::default();
+    for (roman, kana) in KANA
+        .split_ascii_whitespace()
+        .filter_map(|entry| entry.split_once('='))
+    {
+        groups[(roman.as_bytes()[0] - b'a') as usize].push((roman, kana));
+    }
+    groups
+});
 
 pub fn kana(input: &str, finalizing: bool) -> String {
     let mut result = String::new();
@@ -36,7 +49,7 @@ pub fn kana(input: &str, finalizing: bool) -> String {
                 _ => {}
             }
         }
-        if next == Some(first) && first.is_ascii_lowercase() && !b"aiueon".contains(&first) {
+        if next == Some(first) && first.is_ascii_lowercase() && !b"aiueonw".contains(&first) {
             result.push('っ');
             rest = &rest[1..];
             continue;
@@ -46,10 +59,10 @@ pub fn kana(input: &str, finalizing: bool) -> String {
             rest = &rest[1..];
             continue;
         }
-        if let Some((roman, kana)) = KANA
-            .split_ascii_whitespace()
-            .filter_map(|entry| entry.split_once('='))
-            .find(|(roman, _)| rest.starts_with(roman))
+        if first.is_ascii_lowercase()
+            && let Some(&(roman, kana)) = SYLLABLES[(first - b'a') as usize]
+                .iter()
+                .find(|&&(roman, _)| rest.starts_with(roman))
         {
             result.push_str(kana);
             rest = &rest[roman.len()..];
@@ -78,4 +91,16 @@ pub fn dictionary(reading: &str) -> impl Iterator<Item = &'static str> {
         .filter_map(|line| line.split_once('\t'))
         .filter(move |(key, _)| *key == reading)
         .flat_map(|(_, words)| words.split(' '))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kana;
+
+    #[test]
+    fn repeated_w_remains_literal_without_affecting_gemination() {
+        assert_eq!(kana("www", false), "www");
+        assert_eq!(kana("www", true), "www");
+        assert_eq!(kana("kitte", true), "きって");
+    }
 }

@@ -1,4 +1,8 @@
-use std::ptr::{null_mut, slice_from_raw_parts};
+use std::{
+    ptr::{null_mut, slice_from_raw_parts},
+    sync::mpsc::{Receiver, Sender, channel},
+    thread,
+};
 use windows::{
     Win32::{
         System::Com::{
@@ -12,9 +16,50 @@ use windows::{
 
 pub struct MicrosoftIme(Option<IFELanguage>);
 
+pub struct Lookup {
+    requests: Sender<String>,
+    results: Receiver<(String, Vec<String>)>,
+}
+
+impl Lookup {
+    pub fn start(context: eframe::egui::Context) -> Self {
+        let (requests, receiver) = channel::<String>();
+        let (sender, results) = channel();
+        let _ = thread::Builder::new()
+            .name("vime-ime".into())
+            .spawn(move || {
+                let Ok(ime) = MicrosoftIme::open() else {
+                    return;
+                };
+                while let Ok(reading) = receiver.recv() {
+                    let reading = receiver.try_iter().last().unwrap_or(reading);
+                    let candidates = ime.candidates(&reading);
+                    if sender.send((reading, candidates)).is_err() {
+                        break;
+                    }
+                    context.request_repaint();
+                }
+            });
+        Self { requests, results }
+    }
+
+    pub fn request(&self, reading: &str) {
+        if !reading.is_empty()
+            && reading.chars().count() <= 40
+            && reading.chars().all(|c| matches!(c, 'ぁ'..='ゖ' | 'ー'))
+        {
+            let _ = self.requests.send(reading.to_owned());
+        }
+    }
+
+    pub fn latest(&self) -> Option<(String, Vec<String>)> {
+        self.results.try_iter().last()
+    }
+}
+
 impl MicrosoftIme {
     pub fn open() -> windows::core::Result<Self> {
-        // The desktop and overlay share the GUI thread and this COM apartment.
+        // Open and close the COM interface on the same worker thread.
         unsafe {
             CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
             let result = (|| {
