@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use unicode_segmentation::UnicodeSegmentation;
 use vime::{
     calibration::{self, Measurement},
-    ime::{Composer, Language},
+    ime::{Composer, Language, is_reading_char, reading_corrections},
     local_d1::{LocalD1, MIN_LEARN_PROBABILITY, MIN_SUGGESTION_PROBABILITY},
     settings::{TypoProvider, TypoSettings},
     system_one::CancellableClient,
@@ -34,6 +34,7 @@ const RETYPE_IDLE: Duration = Duration::from_millis(1200);
 const EDIT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_WORD: usize = 40;
 const MAX_PAIRS: usize = 1000;
+const MAX_ALTERNATIVES: usize = 4;
 const LEARNED_FILE: &str = "typos.json";
 const MIN_REMOTE_PROBABILITY: f64 = 0.85;
 
@@ -78,6 +79,23 @@ impl Snapshot {
         let word = &self.text[start..end];
         (word.chars().any(char::is_alphanumeric) && word.graphemes(true).count() <= MAX_WORD)
             .then_some(start..end)
+    }
+
+    /// A hiragana tail before the caret that is not a dictionary reading, with
+    /// the readings it is one edit away from.
+    fn japanese_typo(&self) -> Option<(Range<usize>, Vec<String>)> {
+        if self.language != Language::Japanese {
+            return None;
+        }
+        let lower = self.preedit_start.unwrap_or(0);
+        let start = self.text[lower..self.caret]
+            .char_indices()
+            .rev()
+            .take_while(|(_, ch)| is_reading_char(*ch))
+            .last()
+            .map_or(self.caret, |(index, _)| lower + index);
+        let (length, corrections) = reading_corrections(&self.text[start..self.caret])?;
+        Some((self.caret - length..self.caret, corrections))
     }
 
     fn detection_range(&self) -> Option<Range<usize>> {
@@ -771,7 +789,11 @@ impl Worker {
         Ok(Outcome::Evaluated(None))
     }
     fn suggest(&self, settings: &TypoSettings, snapshot: &Snapshot) -> Option<Decision> {
-        let range = snapshot.detection_range()?;
+        let japanese = snapshot.japanese_typo();
+        let (range, readings) = match japanese {
+            Some((range, readings)) => (range, readings),
+            None => (snapshot.detection_range()?, Vec::new()),
+        };
         let original = &snapshot.text[range.clone()];
         let language = snapshot.language.label();
         let mut alternatives: Vec<_> = self
@@ -781,6 +803,19 @@ impl Worker {
             .take(4)
             .map(|pair| pair.replacement.clone())
             .collect();
+        for reading in readings {
+            if alternatives.len() < MAX_ALTERNATIVES
+                && valid_word(&reading)
+                && !alternatives.contains(&reading)
+            {
+                alternatives.push(reading);
+            }
+        }
+        // The model chooses among supplied corrections, so without one for a
+        // Japanese reading there is nothing to ask.
+        if snapshot.language == Language::Japanese && alternatives.is_empty() {
+            return None;
+        }
         if snapshot.language == Language::English
             && (settings.provider != TypoProvider::D1Local || alternatives.is_empty())
             && let Some(spellcheck) = &self.spellcheck
@@ -1233,7 +1268,36 @@ mod tests {
         assert_eq!(&before.text[before.word().unwrap()], pair.original);
         assert_eq!(pair.replacement, "こんにちは");
         assert!(composer.replace_text(after.word().unwrap(), "こんばんは"));
-        assert_eq!(composer.committed(), "前の文こんばんは");
+        // The corrected reading stays underlined so it can still be converted.
+        assert_eq!(composer.committed(), "前の文");
+        assert_eq!(composer.reading(), "こんばんは");
+    }
+
+    #[test]
+    fn corrects_a_mistyped_japanese_reading_from_dictionary_candidates() {
+        let mut composer = Composer::default();
+        composer.insert("前の文");
+        for key in "konpanha".chars() {
+            composer.key(key);
+        }
+        let snapshot = Snapshot::of(&composer);
+        let (range, readings) = snapshot.japanese_typo().unwrap();
+        assert_eq!(&snapshot.text[range.clone()], "こんぱんは");
+        assert!(
+            readings.iter().any(|reading| reading == "こんばんは"),
+            "{readings:?}"
+        );
+        assert!(composer.replace_text(range, "こんばんは"));
+        assert_eq!(composer.committed(), "前の文");
+        assert_eq!(composer.preedit(), "こんばんは");
+        assert!(Snapshot::of(&composer).japanese_typo().is_none());
+
+        // A romaji fragment that is still being typed is not a mistake.
+        composer.clear();
+        for key in "konnichik".chars() {
+            composer.key(key);
+        }
+        assert!(Snapshot::of(&composer).japanese_typo().is_none());
     }
 
     #[test]

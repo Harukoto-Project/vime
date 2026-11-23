@@ -8,6 +8,7 @@ use unicode_segmentation::UnicodeSegmentation;
 pub use conversion::{Conversion, Segment};
 pub use japanese::key_label as japanese_key_label;
 pub use japanese::warm_up as warm_up_dictionary;
+pub use japanese::{is_reading_char, reading_corrections};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Language {
@@ -221,11 +222,22 @@ impl Composer {
         before.to_owned() + &self.reading() + after
     }
 
-    /// Replace a range in the finalized editor text while retaining its caret.
+    /// Replace a range of the editor text while retaining its caret. A range
+    /// inside a Japanese reading stays part of the reading, so that it can still
+    /// be converted afterwards.
     pub fn replace_text(&mut self, range: std::ops::Range<usize>, replacement: &str) -> bool {
         let text = self.text();
         if self.converting() || text.get(range.clone()).is_none() {
             return false;
+        }
+        if self.language == Language::Japanese && range.start >= self.caret {
+            let mut kana = self.reading();
+            let (start, end) = (range.start - self.caret, range.end - self.caret);
+            if end <= kana.len() {
+                kana.replace_range(start..end, replacement);
+                self.reading = kana;
+                return true;
+            }
         }
         self.commit();
         let caret = if self.caret >= range.end {

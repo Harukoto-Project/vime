@@ -215,6 +215,117 @@ pub fn halfwidth(value: &str) -> String {
 /// Loads the dictionary index now so that the first conversion does not stall.
 pub fn warm_up() {
     LazyLock::force(&INDEX);
+    LazyLock::force(&READINGS);
+}
+
+/// Dictionary readings in byte order, for prefix lookups.
+static READINGS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+    let mut readings: Vec<_> = INDEX.keys().copied().collect();
+    readings.sort_unstable();
+    readings
+});
+static KANA_ALPHABET: LazyLock<Vec<char>> = LazyLock::new(|| ('ぁ'..='ゖ').chain(['ー']).collect());
+
+/// Shortest and longest tail of a typed reading that is checked for typos.
+const MIN_TAIL: usize = 3;
+const MAX_TAIL: usize = 12;
+const MAX_CORRECTIONS: usize = 4;
+
+pub fn is_reading_char(ch: char) -> bool {
+    matches!(ch, 'ぁ'..='ゖ' | 'ー')
+}
+
+/// Whether `reading` is a dictionary reading or the start of one, which means
+/// it is either correct or still being typed.
+fn plausible_reading(reading: &str) -> bool {
+    let at = READINGS.partition_point(|known| *known < reading);
+    READINGS
+        .get(at)
+        .is_some_and(|known| known.starts_with(reading))
+}
+
+/// Dictionary readings one edit away from `chars`: a swap of neighbours, a
+/// missing letter, an extra letter or a wrong letter.
+fn one_edit_readings(chars: &[char]) -> Vec<String> {
+    let original: String = chars.iter().collect();
+    let mut found: Vec<(u8, usize, String)> = Vec::new();
+    let mut consider = |rank: u8, edited: &[char]| {
+        let candidate: String = edited.iter().collect();
+        if candidate != original
+            && !found.iter().any(|(_, _, known)| *known == candidate)
+            && let Some(tokens) = INDEX.get(candidate.as_str())
+        {
+            found.push((rank, tokens.split(' ').count(), candidate));
+        }
+    };
+    let mut edited = chars.to_vec();
+    for index in 0..chars.len().saturating_sub(1) {
+        edited.swap(index, index + 1);
+        consider(0, &edited);
+        edited.swap(index, index + 1);
+    }
+    for index in 0..=chars.len() {
+        for &letter in KANA_ALPHABET.iter() {
+            edited.insert(index, letter);
+            consider(1, &edited);
+            edited.remove(index);
+        }
+    }
+    // The first letter may belong to the word before the tail, so it is not
+    // offered for deletion.
+    for index in 1..chars.len() {
+        let letter = edited.remove(index);
+        consider(2, &edited);
+        edited.insert(index, letter);
+    }
+    for index in 0..chars.len() {
+        let letter = edited[index];
+        for &other in KANA_ALPHABET.iter().filter(|&&other| other != letter) {
+            edited[index] = other;
+            consider(3, &edited);
+        }
+        edited[index] = letter;
+    }
+    // Without word frequencies there is no telling which kind of slip is most
+    // likely, so take the best of each kind in turn. The words with more
+    // entries come first within a kind.
+    found.sort_by(|a, b| b.1.cmp(&a.1).then(a.2.cmp(&b.2)));
+    let mut ranked = Vec::new();
+    for round in 0.. {
+        let before = ranked.len();
+        for kind in 0..4 {
+            if let Some((_, _, candidate)) =
+                found.iter().filter(|(rank, ..)| *rank == kind).nth(round)
+            {
+                ranked.push(candidate.clone());
+            }
+        }
+        if ranked.len() == before || ranked.len() >= MAX_CORRECTIONS {
+            break;
+        }
+    }
+    ranked.truncate(MAX_CORRECTIONS);
+    ranked
+}
+
+/// Looks for a mistyped word at the end of `run`, a run of hiragana. Returns the
+/// byte length of that tail and the dictionary readings it may have meant.
+/// The longest tail wins; a tail that is, or may become, a dictionary reading is
+/// not a typo.
+pub fn reading_corrections(run: &str) -> Option<(usize, Vec<String>)> {
+    let chars: Vec<char> = run.chars().collect();
+    for length in (MIN_TAIL..=chars.len().min(MAX_TAIL)).rev() {
+        let tail = &chars[chars.len() - length..];
+        let text: String = tail.iter().collect();
+        if plausible_reading(&text) {
+            return None;
+        }
+        let corrections = one_edit_readings(tail);
+        if !corrections.is_empty() {
+            return Some((text.len(), corrections));
+        }
+    }
+    None
 }
 
 /// Words with exactly this reading as `(is_inflected_form, surface)`.
@@ -371,7 +482,32 @@ pub fn segments(reading: &str, hints: &[(String, String)]) -> Vec<Segment> {
 
 #[cfg(test)]
 mod tests {
-    use super::kana;
+    use super::{kana, reading_corrections};
+
+    #[test]
+    fn offers_dictionary_readings_for_a_mistyped_tail() {
+        let (length, readings) = reading_corrections("きょうはこんぱんは").unwrap();
+        assert_eq!(length, "こんぱんは".len());
+        assert!(
+            readings.iter().any(|reading| reading == "こんばんは"),
+            "{readings:?}"
+        );
+        let (_, readings) = reading_corrections("ありがうと").unwrap();
+        assert!(
+            readings.iter().any(|reading| reading == "ありがとう"),
+            "{readings:?}"
+        );
+        assert!(readings.len() <= super::MAX_CORRECTIONS);
+    }
+
+    #[test]
+    fn leaves_correct_or_unfinished_readings_alone() {
+        assert!(reading_corrections("きょうはこんばんは").is_none());
+        // Still on its way to こんにちは.
+        assert!(reading_corrections("こんに").is_none());
+        assert!(reading_corrections("あい").is_none());
+        assert!(reading_corrections("").is_none());
+    }
 
     #[test]
     fn repeated_consonants_without_a_syllable_remain_literal() {
