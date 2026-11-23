@@ -1,20 +1,34 @@
 # ViME
 
-[English](README.md) · 日本語 · [한국어](README.ko.md)
-
 ViMEは、VR内で日本語・英語・韓国語を入力できる、Windows向けのオープンソースIMEキーボードです。コントローラーでキーを押し、入力した文章をVRChatのChatboxや対応するSteamVRアプリに送れます。
 
 **[Windows版のダウンロード（GitHub Releases）](https://github.com/Harukoto-Project/vime/releases)**
 
+[インストール](#インストール) · [VRChatで使う](#vrchatに送る) · [入力と変換](#言語の切り替えと変換) · [誤字修正](#誤字修正) · [ソースから起動](#ソースから起動する)
+
+[English](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+
 ![ViMEのVRキーボード。「こんにちは、ViMEです。」と入力した状態で、上部に言語切り替え、左下に絵文字ボタンがある。](assets/vr-keyboard.png)
+
+<details>
+<summary>Windows 版のキーボードプレビュー</summary>
+
+![SteamVR に接続した Windows 版 ViME の日本語 JIS キーボードプレビュー。](assets/readme/windows-keyboard-ja.png)
+
+</details>
 
 ## インストール
 
 1. [Releases](https://github.com/Harukoto-Project/vime/releases) から `ViME-<バージョン>-windows-x64.zip` をダウンロードします。
 2. ZIPを展開し、`vime.exe` を起動します。配布版はWindows x64向けで、Rustのインストールは不要です。
-3. VRで使うときはSteamVRを起動します。ViMEが先に起動していた場合は、Windows画面の **SteamVR に接続** を押してください。Windows画面のキーボードプレビューは、SteamVRに接続する前でも試せます。
+3. 初回画面で誤字修正を設定します。**おすすめ設定で始める**を選ぶと、ローカル d1-2B と CUDA 用の実行環境、日本語の誤変換データのダウンロードが始まります。初回は合計約 1.9 GB です。まずキーボードを試す場合は **あとで設定する**を選べます。
+4. VRで使うときはSteamVRを起動します。ViMEが先に起動していた場合は、Windows画面の **SteamVR に接続** を押してください。Windows画面のキーボードプレビューは、SteamVRに接続する前でも試せます。
+
+![Windows 版 ViME の初回セットアップ。おすすめ設定と CPU・Vulkan・CUDA の選択肢が表示されている。](assets/readme/windows-welcome.png)
 
 配布ZIPが見つからない場合は、[ソースから起動する](#ソースから起動する)手順を使ってください。
+
+配布版は起動時に GitHub Releases の更新を確認します。新しいバージョンの準備ができると、終了時に適用されます。すぐに適用するには **設定 → 再起動して更新**を選びます。
 
 ## VRChatに送る
 
@@ -31,8 +45,33 @@ Windows画面の **設定** では、OSCの通知音、開閉ショートカッ�
 - **日本語**はJIS配列でローマ字入力できます。スペースキーの **変換** で漢字やカタカナの候補が出ます。数字と英字は半角のまま、記号は全角で、`,` は `、`、`.` は `。` になります。記号とカタカナの半角表記も変換候補から選べます。**半/全** は半角の直接入力への切り替えです。
 - **English** はQWERTY、**한국어** は두벌식（2ボル式）です。韓国語の **한/영** で英数字の直接入力に切り替えられます。
 - **左下の 😃** で絵文字・顔文字・記号の一覧を開きます。英語入力では `:cat:` のような短縮名からも絵文字を選べます。
+- **Backspace** と **Space** は押し続けると連続入力できます。キーを押すと打鍵音が鳴ります。
 
 ![日本語の変換欄に、全角の「パーティー」と半角の「ﾊﾟｰﾃｨｰ」が並ぶ。](assets/vr-conversion.png)
+
+## 誤字修正
+
+誤字修正を有効にすると、辞書の読みに近い日本語の入力に修正候補が出ます。候補欄の **✓** 付きの候補を選ぶと入力が置き換わります。日本語の誤変換データを追加すると、漢字の変換ミスも候補にできます。
+
+### d1-2B（ローカル）の推論デバイスを選ぶ
+
+PCの構成によっては **GPU（Vulkan）** が **GPU（CUDA）** より速く動きます。両方使える場合は、次の手順で比べてください。
+
+1. Windows 版で **設定 → 誤字修正 → d1-2B（ローカル）** を選びます。**推論デバイス**で **GPU（CUDA）** を選び、必要ならモデルや推論エンジンをダウンロードします。
+2. **キャリブレーション**の **負荷を測定**を押します。完了後に **最大送信レート**（req/s）を確認します。
+3. **GPU（Vulkan）** に切り替え、必要なダウンロードを済ませてから、同じ条件で再度測定します。**最大送信レート**が高い方を選び、**設定を保存**を押します。GPU 推論が使えない場合は **CPU** を選べます。
+
+以前にレートを手動で変更した場合は、各デバイスで **自動設定に戻す** を押してから値を比べてください。
+
+比較する値は、**負荷を測定** ボタンの下にある **最大送信レート** です。ボタン上の **実測** は、測定中に観測した処理件数を req/s で表示します。
+
+![GPU（Vulkan）を選択した日本語のキャリブレーション画面。負荷を測定ボタンの下に最大送信レートが表示されている。](assets/readme/windows-calibration-ja.png)
+
+### API と報告の設定
+
+ローカル d1-2B はこの PC 上で判定します。**d1-2B（API）**、**TypeSafe Jev**、**System One 互換**を選ぶ場合、判定対象の語と前後の一部が設定先へ送信されます。
+
+**誤字・誤変換の報告を許可する**は既定でオンです。報告先を設定したビルドでは、誤字修正が有効で、打ち直しが修正と判定されると、修正前後の語、入力言語、ViME のバージョンを運営者に送ります。初回画面または **設定**でオフにできます。[報告 API の仕様](CONTRIBUTING.md#誤字誤変換の報告-api)
 
 ## ほかのSteamVRアプリで使う
 
@@ -62,4 +101,6 @@ cargo run --release --locked
 
 ### 要求したときだけ取得するデータ
 
-ViME には日本語Wikipedia入力誤りデータセットの複製は含まれません。設定の「日本語の誤変換データ」で **ダウンロード** を押すと、ViME が京都大学から [JWTD v2](https://nlp.ist.i.kyoto-u.ac.jp/EN/index.php?JWTD)（京都大学 言語メディア研究室、[CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.ja)）を直接取得し、編集者が直した漢字の語を集計します。残るのはその語の表だけで、`%LOCALAPPDATA%\ViME\misconversions.tsv` に保存されます。この表は共有されず、CC BY-SA 3.0 のままです。出典: 田中佑, 村脇有吾, 河原大輔, 黒橋禎夫. 日本語Wikipediaの編集履歴に基づく入力誤りデータセットと訂正システムの改良. 言語処理学会第27回年次大会, 2021.
+ViME には日本語Wikipedia入力誤りデータセットの複製は含まれません。設定の「日本語の誤変換データ」で **ダウンロード** を押すと、ViME が京都大学から [JWTD v2](https://nlp.ist.i.kyoto-u.ac.jp/EN/index.php?JWTD)（京都大学 言語メディア研究室、[CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.ja)）を直接取得し、編集者が直した漢字の語を集計します。残るのはその語の表だけで、`%LOCALAPPDATA%\ViME\misconversions.tsv` に保存されます。この表は共有されず、CC BY-SA 3.0 のままです。田中佑、村脇有吾、河原大輔、黒橋禎夫。言語処理学会第27回年次大会、2021年。[JWTD v2 の論文](https://www.anlp.jp/proceedings/annual_meeting/2021/pdf_dir/E8-3.pdf)
+
+打鍵音は unicaegames の [Keyboard Soundpack #1](https://opengameart.org/node/122745)（[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)）を使用しています。ローカル推論には [llama.cpp](https://github.com/ggml-org/llama.cpp) と [Liquid AI の d1-2B Q4_K_M](https://huggingface.co/LiquidAI/d1-2B-GGUF) を使用します。

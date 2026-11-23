@@ -32,7 +32,7 @@ ViME は、誤字修正の判定が有効で、利用者が報告を許可して
 ```json
 {
   "schema_version": 1,
-  "app_version": "0.1.0",
+  "app_version": "1.0.0",
   "language": "ja",
   "original": "異義",
   "replacement": "異議"
