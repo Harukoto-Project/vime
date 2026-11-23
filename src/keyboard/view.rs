@@ -98,14 +98,28 @@ fn draw(
     controller_input: bool,
     caret_visible: bool,
 ) -> (Interaction, VrKeys) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, width / ASPECT), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, width / ASPECT), Sense::hover());
     let scale = rect.width() / SIZE[0] as f32;
+    let hold_id = response.id.with("repeat_hold");
+    let (keep_hold, start_hold) = ui.input(|input| {
+        let down = !controller_input && input.focused && input.pointer.primary_down();
+        (
+            down && !input.pointer.primary_released(),
+            down && input.pointer.primary_pressed(),
+        )
+    });
+    let held = if keep_hold {
+        ui.data_mut(|data| data.get_temp::<Action>(hold_id))
+    } else {
+        None
+    };
     let mut view = Board {
         ui,
         rect,
         scale,
         action: None,
-        held: None,
+        held,
+        start_hold,
         controller_input,
         keys: Vec::new(),
         editor: None,
@@ -120,6 +134,16 @@ fn draw(
         view.keys(keyboard, destination);
     }
     view.emoji_toggle(keyboard.emoji);
+    if !controller_input {
+        // egui can stop tracking a click before the button is released.
+        view.ui.data_mut(|data| {
+            if let Some(action) = &view.held {
+                data.insert_temp(hold_id, action.clone());
+            } else {
+                data.remove::<Action>(hold_id);
+            }
+        });
+    }
     (
         Interaction {
             action: view.action,
@@ -139,6 +163,7 @@ struct Board<'a> {
     scale: f32,
     action: Option<Action>,
     held: Option<Action>,
+    start_hold: bool,
     controller_input: bool,
     keys: Vec<(Rect, Action)>,
     editor: Option<EditorHit>,
@@ -383,7 +408,8 @@ impl Board<'_> {
 
     fn candidates(&mut self, keyboard: &Keyboard) {
         let values = &keyboard.candidates;
-        if values.is_empty() {
+        let correction = keyboard.typo_suggestion();
+        if values.is_empty() && correction.is_none() {
             let hint = match keyboard.composer.language() {
                 Language::Japanese if keyboard.direct_input() => {
                     tr("半角英数字 · 半角/全角で日本語入力に切り替え")
@@ -405,6 +431,16 @@ impl Board<'_> {
             return;
         }
         let mut x = 22.;
+        if let Some(word) = correction {
+            self.button(
+                self.box_at(x, 141., 103., 36.),
+                &format!("✓ {word}"),
+                17.,
+                Face::Selected,
+                Action::CorrectTypo(word.to_owned()),
+            );
+            x += 110.;
+        }
         if let Some(conversion) = keyboard.composer.conversion() {
             // Clause navigation, like the arrow keys of a desktop IME.
             let last = conversion.segments().len() - 1;
@@ -844,13 +880,23 @@ impl Board<'_> {
                 response
             };
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
-            if enabled && action.repeats() && response.is_pointer_button_down_on() {
+            if self.start_hold
+                && self.held.is_none()
+                && enabled
+                && action.repeats()
+                && response.is_pointer_button_down_on()
+            {
                 self.held = Some(action.clone());
             }
+            let pressed = response.is_pointer_button_down_on()
+                || self
+                    .held
+                    .as_ref()
+                    .is_some_and(|held| held.same_key(&action));
             if response.clicked() {
                 self.action = Some(action);
             }
-            (response.hovered(), response.is_pointer_button_down_on())
+            (response.hovered(), pressed)
         }
     }
 
@@ -1037,4 +1083,64 @@ fn gradient(painter: &Painter, rect: Rect, radius: f32) {
         mesh.add_triangle(0, index + 1, (index + 1) % perimeter + 1);
     }
     painter.add(Shape::mesh(mesh));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::overlay_surface::pointer_button;
+
+    #[test]
+    fn repeating_keys_stay_held_after_egui_cancels_the_click() {
+        for key in [Action::Backspace, Action::Space] {
+            let context = egui::Context::default();
+            let mut keyboard = Keyboard::new(context.clone());
+            keyboard.apply(Action::Key('a'));
+            let width = SIZE[0] as f32;
+            let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 500.));
+            let mut position = Pos2::ZERO;
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                let keys = show_vr(ui, &keyboard, Destination::Osc, true);
+                position = keys
+                    .keys
+                    .iter()
+                    .find(|(_, action)| action.same_key(&key))
+                    .unwrap()
+                    .0
+                    .center();
+            });
+            output.textures_delta.clear();
+
+            let draw = |time, events| {
+                let input = egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                };
+                let mut result = Interaction::default();
+                let mut output = context.run_ui(input, |ui| {
+                    result = show(ui, &keyboard, width, Destination::Osc, true);
+                });
+                output.textures_delta.clear();
+                result
+            };
+            draw(0., vec![]);
+            draw(0.1, vec![egui::Event::PointerMoved(position)]);
+            let press = draw(0.2, vec![pointer_button(position, true)]);
+            assert!(press.held.unwrap().same_key(&key));
+
+            let held = draw(1.2, vec![]);
+            assert!(!context.input(|input| input.pointer.could_any_button_be_click()));
+            assert!(held.held.unwrap().same_key(&key));
+
+            let outside = Pos2::new(12., 450.);
+            let moved = draw(1.3, vec![egui::Event::PointerMoved(outside)]);
+            assert!(moved.held.unwrap().same_key(&key));
+
+            let release = draw(1.4, vec![pointer_button(outside, false)]);
+            assert!(release.held.is_none());
+            assert!(release.action.is_none());
+        }
+    }
 }

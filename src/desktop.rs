@@ -1,7 +1,9 @@
+mod learned_typos;
+
 use crate::{
-    dashboard::{self, Command, Dashboard, Page},
+    dashboard::{self, Command, Dashboard},
     hotkeys::Hotkeys,
-    keyboard::{self, Action, Keyboard, Repeater, VrKeys},
+    keyboard::{self, Action, CalibrationJob, Keyboard, Repeater, VrKeys},
     overlay_surface::OverlaySurface,
     power,
 };
@@ -9,7 +11,9 @@ use eframe::egui::{
     self, Align, Button, Color32, FontData, FontDefinitions, FontFamily, Frame, Layout, Margin,
     RichText, ScrollArea, Stroke, Ui, ViewportBuilder,
 };
+use learned_typos::LearnedTypos;
 use std::{
+    collections::HashMap,
     env, fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -17,9 +21,11 @@ use std::{
 };
 use vime::{
     brand,
+    calibration::{self, Profile},
     i18n::{self, Lang, tr, tr_args},
+    local_d1::{self, Download},
     output,
-    settings::{Destination, Settings},
+    settings::{D1Device, Destination, Settings, TypoProvider, TypoSettings},
     steamvr::{Pointer, SteamVr, Surface},
 };
 
@@ -30,14 +36,24 @@ const INK: Color32 = Color32::from_rgb(241, 245, 251);
 const SECONDARY: Color32 = Color32::from_rgb(176, 192, 209);
 const ACCENT: Color32 = Color32::from_rgb(159, 211, 255);
 const ERROR: Color32 = Color32::from_rgb(255, 177, 168);
+const WIDE_LAYOUT: f32 = 640.;
+const MAX_PAGE_WIDTH: f32 = 1080.;
 const HIDDEN_PAINT_RETRY: Duration = Duration::from_millis(50);
+
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+enum Page {
+    #[default]
+    Keyboard,
+    Settings,
+    LearnedTypos,
+}
 
 pub fn run() -> eframe::Result {
     power::disable_throttling();
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_inner_size([980., 826.])
-            .with_min_inner_size([670., 560.])
+            .with_min_inner_size([480., 360.])
             .with_icon(brand::icon())
             .with_app_id("org.harukoto.vime"),
         renderer: eframe::Renderer::Glow,
@@ -64,6 +80,7 @@ struct App {
     vr: Option<SteamVr>,
     auto_connect: bool,
     page: Page,
+    learned_typos: LearnedTypos,
     dashboard: Dashboard,
     world_keys: Option<VrKeys>,
     pending_world_keys: Option<VrKeys>,
@@ -77,13 +94,21 @@ struct App {
     steamvr_message: String,
     settings_message: String,
     settings_error: bool,
-    /// Held-key repeat for the desktop window, the VR dashboard and the VR keyboard.
-    repeaters: [Repeater; 3],
+    api_key_edits: HashMap<String, Option<String>>,
+    api_key_before_url: Option<(TypoProvider, String)>,
+    model_download: Option<Download>,
+    model_error: Option<std::io::Error>,
+    calibration_job: Option<(String, CalibrationJob)>,
+    calibration_error: Option<(String, std::io::Error)>,
+    calibration_attempts: HashMap<String, Instant>,
+    calibration_check: Instant,
+    /// Held-key repeat for the desktop window and the VR dashboard.
+    repeaters: [Repeater; 2],
+    world_repeaters: [Repeater; 2],
 }
 
 const DESKTOP: usize = 0;
 const DASHBOARD: usize = 1;
-const WORLD: usize = 2;
 
 struct Surfaces {
     keyboard: OverlaySurface,
@@ -142,16 +167,19 @@ impl App {
                 None
             }
         };
+        let mut keyboard = Keyboard::new(creation.egui_ctx.clone());
+        keyboard.configure_typo(&settings.typo, &directory);
         Ok(Self {
             directory,
             draft: settings.clone(),
             settings,
             hotkeys,
-            keyboard: Keyboard::new(creation.egui_ctx.clone()),
+            keyboard,
             surfaces,
             vr: None,
             auto_connect: true,
             page: Page::default(),
+            learned_typos: LearnedTypos::default(),
             dashboard: Dashboard::default(),
             world_keys: None,
             pending_world_keys: None,
@@ -165,12 +193,45 @@ impl App {
             steamvr_message: String::new(),
             settings_error: !settings_message.is_empty(),
             settings_message,
+            api_key_edits: HashMap::new(),
+            api_key_before_url: None,
+            model_download: None,
+            model_error: None,
+            calibration_job: None,
+            calibration_error: None,
+            calibration_attempts: HashMap::new(),
+            calibration_check: Instant::now(),
             repeaters: Default::default(),
+            world_repeaters: Default::default(),
         })
     }
 
     fn apply_settings(&mut self) -> Result<(), String> {
         self.draft.hotkey = self.draft.hotkey.trim().to_owned();
+        let mut proposed = self.draft.clone();
+        if self.key_before_url(&proposed.typo).is_some() {
+            let scope = editable_api_key_scope(&proposed.typo).ok_or_else(|| {
+                tr("System One の HTTP または HTTPS URL を入力してください").to_owned()
+            })?;
+            if !self.api_key_edits.contains_key(&scope) {
+                self.apply_api_key_edit(&mut proposed.typo, &scope)
+                    .map_err(|error| {
+                        tr_args(
+                            "API キーを保護できませんでした ({0})",
+                            &[&error.to_string()],
+                        )
+                    })?;
+            }
+        }
+        for scope in self.api_key_edits.keys() {
+            self.apply_api_key_edit(&mut proposed.typo, scope)
+                .map_err(|error| {
+                    tr_args(
+                        "API キーを保護できませんでした ({0})",
+                        &[&error.to_string()],
+                    )
+                })?;
+        }
         let prepared = match self.hotkeys.as_ref() {
             Some(hotkeys) => Some(hotkeys.prepare(&self.draft.hotkey)?),
             None if self.settings.hotkey != self.draft.hotkey => {
@@ -178,7 +239,7 @@ impl App {
             }
             None => None,
         };
-        if let Err(error) = self.draft.save(&self.directory) {
+        if let Err(error) = proposed.save(&self.directory) {
             if let (Some(hotkeys), Some(key)) = (&self.hotkeys, prepared) {
                 hotkeys.cancel(key);
             }
@@ -187,7 +248,13 @@ impl App {
         if let (Some(hotkeys), Some(key)) = (&mut self.hotkeys, prepared) {
             hotkeys.activate(key);
         }
+        self.draft = proposed;
+        self.api_key_edits.clear();
+        self.api_key_before_url = None;
         self.settings = self.draft.clone();
+        self.calibration_check = Instant::now();
+        self.keyboard
+            .configure_typo(&self.settings.typo, &self.directory);
         if let Some(vr) = &mut self.vr
             && let Err(error) = vr.set_width(self.settings.overlay_width)
         {
@@ -232,7 +299,7 @@ impl App {
         self.pointers = [None; 2];
         self.last_pointers = [None; 2];
         self.draw_errors[0] = None;
-        self.repeaters[WORLD].release();
+        self.world_repeaters = Default::default();
     }
 
     fn disconnect(&mut self) {
@@ -243,7 +310,7 @@ impl App {
         self.pointers = [None; 2];
         self.last_pointers = [None; 2];
         self.dashboard.reset();
-        self.repeaters[WORLD].release();
+        self.world_repeaters = Default::default();
         self.repeaters[DASHBOARD].release();
         self.dashboard_visible = false;
         self.paint_requested = None;
@@ -269,6 +336,9 @@ impl App {
     }
 
     fn keyboard_action(&mut self, action: Action) {
+        if !matches!(action, Action::MoveCaret(_)) {
+            keyboard::play_click();
+        }
         match action {
             Action::Close => {
                 if self.vr.as_ref().is_some_and(SteamVr::visible) {
@@ -279,6 +349,7 @@ impl App {
                 self.keyboard.apply(Action::Commit)
             }
             Action::Enter => {
+                self.keyboard.finish_typo_edit();
                 let text = self.keyboard.composer.text();
                 let sent = match self.settings.destination {
                     Destination::Osc => {
@@ -351,10 +422,10 @@ impl App {
 
         let mut command = None;
         let revision = Some((self.keyboard.revision, caret_visible));
-        if surfaces.dashboard.can_present(now)
+        let dashboard_rendered = surfaces.dashboard.can_present(now)
             && (self.dashboard.redraw
-                || (self.dashboard.active && self.dashboard_revision != revision))
-        {
+                || (self.dashboard.active && self.dashboard_revision != revision));
+        if dashboard_rendered {
             self.dashboard.redraw = false;
             self.dashboard_revision = revision;
             let events = self.dashboard.take_events();
@@ -376,19 +447,22 @@ impl App {
             self.draw_errors[1] = result.err();
         }
 
-        match command {
-            Some(Command::Keyboard(action)) => {
-                // A held key already acted when it was pressed.
-                if !(action.repeats() && self.repeaters[DASHBOARD].holding(&action)) {
-                    self.keyboard_action(action);
-                }
-            }
+        let click = match command {
+            Some(Command::Keyboard(action)) => Some(action),
             Some(Command::OpenBindings) => {
                 self.settings_message = vr.open_bindings(false).err().unwrap_or_default();
                 self.dashboard.redraw = true;
+                None
             }
-            Some(Command::SaveSettings) => self.save_draft(),
-            None => {}
+            Some(Command::SaveSettings) => {
+                self.save_draft();
+                None
+            }
+            None => None,
+        };
+        if dashboard_rendered {
+            let held = self.dashboard.held_key().cloned();
+            self.pointer_repeats(DASHBOARD, click, held);
         }
     }
 
@@ -398,13 +472,14 @@ impl App {
         };
         let actions = presses.map(|point| point.and_then(|point| keys.action_at(point)));
         let mut entered = false;
-        for action in actions.into_iter().flatten() {
+        for (hand, action) in actions.into_iter().enumerate() {
+            let Some(action) = action else { continue };
             if matches!(action, Action::Enter) && std::mem::replace(&mut entered, true) {
                 continue;
             }
             let close = matches!(action, Action::Close);
             if action.repeats() {
-                self.repeaters[WORLD].begin(&action, Instant::now());
+                self.world_repeaters[hand].begin(&action, Instant::now());
             }
             self.keyboard_action(action);
             if close {
@@ -414,16 +489,12 @@ impl App {
     }
 
     /// Applies the keys that repeat while a VR controller holds them.
-    fn world_key_repeats(&mut self) {
-        let held = self.world_keys.as_ref().and_then(|keys| {
-            self.pointers
-                .iter()
-                .flatten()
-                .filter(|pointer| pointer.down)
-                .find_map(|pointer| keys.action_at(pointer.uv).filter(Action::repeats))
-        });
-        if let Some(action) = self.repeaters[WORLD].follow(held.as_ref(), Instant::now()) {
-            self.keyboard_action(action);
+    fn world_key_repeats(&mut self, buttons_down: [bool; 2]) {
+        let now = Instant::now();
+        for (hand, down) in buttons_down.into_iter().enumerate() {
+            if let Some(action) = self.world_repeaters[hand].repeat_while(down, now) {
+                self.keyboard_action(action);
+            }
         }
     }
 
@@ -448,41 +519,67 @@ impl App {
     }
 
     fn page(&mut self, ui: &mut Ui) {
-        ui.set_max_width(ui.available_width().min(1080.));
         ui.style_mut().spacing.interact_size.y = 30.;
+        let width = ui.available_width();
         ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                brand::wordmark(ui, 26.);
-                ui.label(
-                    RichText::new(tr("SteamVR向け IMEキーボード"))
-                        .size(15.)
-                        .color(SECONDARY),
-                );
+            brand::wordmark(ui, 26.);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                egui::ComboBox::from_id_salt("desktop_language")
+                    .selected_text(self.draft.language.name())
+                    .show_ui(ui, |ui| {
+                        for option in Lang::ALL {
+                            ui.selectable_value(&mut self.draft.language, option, option.name());
+                        }
+                    })
+                    .response
+                    .on_hover_text(tr("言語"));
             });
         });
+        ui.label(
+            RichText::new(tr("SteamVR向け IMEキーボード"))
+                .size(15.)
+                .color(SECONDARY),
+        );
         ui.add_space(17.);
         self.steamvr_panel(ui);
         ui.add_space(14.);
-        Page::tabs(&mut self.page, ui);
+        let previous = self.page;
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut self.page, Page::Keyboard, tr("キーボード"));
+            ui.selectable_value(&mut self.page, Page::Settings, tr("設定"));
+            ui.selectable_value(&mut self.page, Page::LearnedTypos, tr("学習済みの誤字"));
+        });
         ui.add_space(14.);
+        if self.page == Page::LearnedTypos {
+            if previous != self.page {
+                self.learned_typos.refresh_on_open();
+            }
+            self.learned_typos
+                .show(ui, &self.directory, self.keyboard.learned_typos_revision());
+            return;
+        }
         if self.page == Page::Settings {
             let before = self.draft.clone();
             self.settings_panel(ui);
             self.dashboard.redraw |= self.draft != before;
             return;
         }
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(tr("キーボードプレビュー")).size(18.).strong());
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(
-                    RichText::new(self.settings.destination.label())
-                        .size(13.)
-                        .color(SECONDARY),
-                );
+        let title = RichText::new(tr("キーボードプレビュー")).size(18.).strong();
+        let destination = RichText::new(self.settings.destination.label())
+            .size(13.)
+            .color(SECONDARY);
+        if width >= WIDE_LAYOUT {
+            ui.horizontal(|ui| {
+                ui.label(title);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(destination);
+                });
             });
-        });
+        } else {
+            ui.label(title);
+            ui.label(destination);
+        }
         ui.add_space(5.);
-        let width = ui.available_width().min(900.);
         let interaction = keyboard::show(
             ui,
             &self.keyboard,
@@ -502,46 +599,19 @@ impl App {
 
     fn steamvr_panel(&mut self, ui: &mut Ui) {
         panel().show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("SteamVR").size(17.).strong());
-                    let status = match &self.vr {
-                        Some(vr) if vr.visible() => tr("接続済み · キーボード表示中"),
-                        Some(_) => tr("接続済み"),
-                        None => tr("未接続"),
-                    };
-                    ui.label(RichText::new(status).color(if self.vr.is_some() {
-                        ACCENT
-                    } else {
-                        SECONDARY
-                    }));
+            ui.set_min_width(ui.available_width());
+            if ui.available_width() >= WIDE_LAYOUT {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| self.steamvr_status(ui));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        self.steamvr_actions(ui);
+                    });
                 });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if let Some(vr) = &self.vr {
-                        let visible = vr.visible();
-                        if ui.button(tr("切断")).clicked() {
-                            self.disconnect();
-                            self.steamvr_message.clear();
-                            return;
-                        }
-                        if ui.button(tr("VR の割り当てを編集")).clicked() {
-                            self.steamvr_message = vr.open_bindings(true).err().unwrap_or_default();
-                        }
-                        if ui
-                            .add(Button::new(if visible {
-                                tr("キーボードを閉じる")
-                            } else {
-                                tr("キーボードを開く")
-                            }))
-                            .clicked()
-                        {
-                            self.toggle();
-                        }
-                    } else if ui.add(primary(tr("SteamVR に接続"))).clicked() {
-                        self.connect();
-                    }
-                });
-            });
+            } else {
+                self.steamvr_status(ui);
+                ui.add_space(5.);
+                self.steamvr_actions(ui);
+            }
             if !self.steamvr_message.is_empty() {
                 ui.label(RichText::new(&self.steamvr_message).color(ERROR));
             }
@@ -551,53 +621,64 @@ impl App {
         });
     }
 
+    fn steamvr_status(&self, ui: &mut Ui) {
+        ui.label(RichText::new("SteamVR").size(17.).strong());
+        let status = match &self.vr {
+            Some(vr) if vr.visible() => tr("接続済み · キーボード表示中"),
+            Some(_) => tr("接続済み"),
+            None => tr("未接続"),
+        };
+        ui.label(RichText::new(status).color(if self.vr.is_some() { ACCENT } else { SECONDARY }));
+    }
+
+    fn steamvr_actions(&mut self, ui: &mut Ui) {
+        ui.horizontal_wrapped(|ui| {
+            if let Some(vr) = &self.vr {
+                let toggle = if vr.visible() {
+                    tr("キーボードを閉じる")
+                } else {
+                    tr("キーボードを開く")
+                };
+                let toggle_clicked = ui.button(toggle).clicked();
+                if ui.button(tr("VR の割り当てを編集")).clicked() {
+                    self.steamvr_message = vr.open_bindings(true).err().unwrap_or_default();
+                }
+                if ui.button(tr("切断")).clicked() {
+                    self.disconnect();
+                    self.steamvr_message.clear();
+                } else if toggle_clicked {
+                    self.toggle();
+                }
+            } else if ui.add(primary(tr("SteamVR に接続"))).clicked() {
+                self.connect();
+            }
+        });
+    }
+
     fn settings_panel(&mut self, ui: &mut Ui) {
         panel().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.label(RichText::new(tr("設定")).size(18.).strong());
             ui.add_space(5.);
-            ui.columns(2, |columns| {
-                let [destination, binding] = columns else {
-                    unreachable!("two settings columns")
-                };
-                destination.label(RichText::new(tr("送信先")).color(SECONDARY));
-                dashboard::destination_options(destination, &mut self.draft.destination);
-                if self.draft.destination == Destination::Osc {
-                    destination.horizontal_wrapped(|ui| {
-                        ui.label(tr("UDP ポート"));
-                        ui.add(egui::DragValue::new(&mut self.draft.osc_port).range(1..=65535));
-                        ui.checkbox(&mut self.draft.osc_notify, tr("チャット通知音"));
-                    });
-                    destination.label(
-                        RichText::new(tr("VRChat側でOSCを有効にしてください"))
-                            .size(12.)
-                            .color(SECONDARY),
-                    );
-                } else {
-                    destination.label(
-                        RichText::new(tr("VRアプリの入力欄を開き、Windowsで前面にします"))
-                            .size(12.)
-                            .color(SECONDARY),
-                    );
-                }
-
-                binding.label(RichText::new(tr("Windows 開閉ショートカット")).color(SECONDARY));
-                binding.add(
-                    egui::TextEdit::singleline(&mut self.draft.hotkey)
-                        .hint_text("Ctrl+Shift+F8")
-                        .desired_width(200.),
-                );
-                binding.horizontal_wrapped(|ui| {
-                    ui.label(tr("キーボード幅"));
-                    ui.add(
-                        egui::Slider::new(&mut self.draft.overlay_width, 0.65..=1.65).suffix(" m"),
-                    );
+            if ui.available_width() >= WIDE_LAYOUT {
+                ui.columns_const(|[destination, controls]| {
+                    self.destination_settings(destination);
+                    self.control_settings(controls);
                 });
-                binding.add_space(6.);
-                binding.label(RichText::new(tr("言語")).color(SECONDARY));
-                dashboard::language_options(binding, &mut self.draft.language);
-            });
+            } else {
+                self.destination_settings(ui);
+                ui.add_space(10.);
+                ui.separator();
+                ui.add_space(10.);
+                self.control_settings(ui);
+            }
+
             ui.add_space(10.);
-            ui.horizontal(|ui| {
+            ui.separator();
+            ui.add_space(10.);
+            self.typo_settings(ui);
+            ui.add_space(10.);
+            if !self.settings_message.is_empty() {
                 ui.label(RichText::new(&self.settings_message).small().color(
                     if self.settings_error {
                         ERROR
@@ -605,21 +686,476 @@ impl App {
                         SECONDARY
                     },
                 ));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .add_enabled(self.draft != self.settings, primary(tr("設定を保存")))
-                        .clicked()
-                    {
-                        self.save_draft();
-                    }
-                });
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add_enabled(
+                        self.draft != self.settings
+                            || !self.api_key_edits.is_empty()
+                            || self.api_key_before_url.is_some(),
+                        primary(tr("設定を保存")),
+                    )
+                    .clicked()
+                {
+                    self.save_draft();
+                }
             });
         });
     }
+
+    fn destination_settings(&mut self, ui: &mut Ui) {
+        ui.label(RichText::new(tr("送信先")).color(SECONDARY));
+        dashboard::destination_options(ui, &mut self.draft.destination);
+        let hint = if self.draft.destination == Destination::Osc {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(tr("UDP ポート"));
+                ui.add(egui::DragValue::new(&mut self.draft.osc_port).range(1..=65535));
+                ui.checkbox(&mut self.draft.osc_notify, tr("チャット通知音"));
+            });
+            tr("VRChat側でOSCを有効にしてください")
+        } else {
+            tr("VRアプリの入力欄を開き、Windowsで前面にします")
+        };
+        ui.label(RichText::new(hint).size(12.).color(SECONDARY));
+    }
+
+    fn control_settings(&mut self, ui: &mut Ui) {
+        ui.label(RichText::new(tr("Windows 開閉ショートカット")).color(SECONDARY));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.draft.hotkey)
+                .hint_text("Ctrl+Shift+F8")
+                .desired_width(200.),
+        );
+        ui.horizontal_wrapped(|ui| {
+            ui.label(tr("キーボード幅"));
+            ui.add(egui::Slider::new(&mut self.draft.overlay_width, 0.65..=1.65).suffix(" m"));
+        });
+    }
+
+    fn typo_settings(&mut self, ui: &mut Ui) {
+        let typo = &mut self.draft.typo;
+        ui.label(RichText::new(tr("誤字修正")).color(SECONDARY));
+        egui::ComboBox::from_id_salt("typo_provider")
+            .selected_text(typo.provider.label())
+            .show_ui(ui, |ui| {
+                for provider in TypoProvider::ALL {
+                    ui.selectable_value(&mut typo.provider, provider, provider.label());
+                }
+            });
+        if typo.provider == TypoProvider::Off {
+            return;
+        }
+        if typo.provider == TypoProvider::D1Local {
+            self.model_panel(ui);
+        } else if matches!(typo.provider, TypoProvider::D1 | TypoProvider::Custom) {
+            ui.label("System One URL");
+            ui.add(system_one_field(&mut typo.url).hint_text("http://127.0.0.1:8080/v1/systemone"));
+            if typo.provider == TypoProvider::Custom {
+                ui.label(tr("モデル名（任意）"));
+                ui.add(system_one_field(&mut typo.model));
+            }
+        } else {
+            ui.label(typo.endpoint());
+        }
+        if self.draft.typo.provider != TypoProvider::D1Local {
+            self.api_key_field(ui);
+            ui.label(
+                RichText::new(tr("判定時は対象の語と前後の一部が設定先へ送信されます")).small(),
+            );
+        }
+        self.calibration_panel(ui);
+        if self.draft.typo == self.settings.typo
+            && let Some(error) = self.keyboard.typo_error()
+        {
+            ui.label(
+                RichText::new(tr_args(
+                    "誤字判定に失敗しました ({0})",
+                    &[&error.to_string()],
+                ))
+                .color(ERROR),
+            );
+        }
+    }
+
+    fn api_key_field(&mut self, ui: &mut Ui) {
+        let scope = editable_api_key_scope(&self.draft.typo);
+        let provider = self.draft.typo.provider;
+        let saved = scope
+            .as_ref()
+            .is_some_and(|scope| self.draft.typo.protected_api_keys.contains_key(scope));
+        let edit = scope
+            .as_ref()
+            .and_then(|scope| self.api_key_edits.get(scope));
+        let mut text = match edit {
+            Some(pending) => pending.clone().unwrap_or_default(),
+            None => self
+                .key_before_url(&self.draft.typo)
+                .unwrap_or_default()
+                .to_owned(),
+        };
+        ui.label(tr("API キー"));
+        let removed = matches!(edit, Some(None));
+        let placeholder = if saved && !removed {
+            tr("保存済み（変更する場合は入力）")
+        } else {
+            tr("API キーを入力")
+        };
+        if ui
+            .add(
+                api_key_input(&mut text, placeholder)
+                    .id_salt((self.draft.typo.key_variable(), scope.as_deref())),
+            )
+            .changed()
+        {
+            if let Some(scope) = &scope {
+                if self.key_before_url(&self.draft.typo).is_some() {
+                    self.api_key_before_url = None;
+                }
+                if text.trim().is_empty() {
+                    self.api_key_edits.remove(scope);
+                } else {
+                    self.api_key_edits.insert(scope.clone(), Some(text));
+                }
+            } else {
+                self.api_key_before_url = (!text.trim().is_empty()).then_some((provider, text));
+            }
+        }
+        if saved
+            && !removed
+            && let Some(scope) = scope
+            && ui.small_button(tr("保存済みのキーを削除")).clicked()
+        {
+            self.api_key_edits.insert(scope, None);
+        }
+    }
+
+    fn key_before_url(&self, typo: &TypoSettings) -> Option<&str> {
+        self.api_key_before_url
+            .as_ref()
+            .filter(|(provider, _)| *provider == typo.provider)
+            .map(|(_, key)| key.as_str())
+    }
+
+    fn apply_api_key_edit(&self, typo: &mut TypoSettings, scope: &str) -> std::io::Result<()> {
+        match self.api_key_edits.get(scope) {
+            Some(Some(key)) => {
+                let protected = vime::credentials::protect(key.trim(), scope)?;
+                typo.protected_api_keys.insert(scope.to_owned(), protected);
+            }
+            Some(None) => {
+                typo.protected_api_keys.remove(scope);
+            }
+            None if editable_api_key_scope(typo).as_deref() == Some(scope) => {
+                if let Some(key) = self.key_before_url(typo) {
+                    let protected = vime::credentials::protect(key.trim(), scope)?;
+                    typo.protected_api_keys.insert(scope.to_owned(), protected);
+                }
+            }
+            None => {}
+        }
+        Ok(())
+    }
+
+    fn model_panel(&mut self, ui: &mut Ui) {
+        let selected = &mut self.draft.typo.d1_device;
+        let before = *selected;
+        ui.add_enabled_ui(self.model_download.is_none(), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(tr("推論デバイス"));
+                ui.radio_value(selected, D1Device::Cpu, "CPU");
+                ui.radio_value(selected, D1Device::Vulkan, tr("GPU（Vulkan）"));
+                ui.radio_value(selected, D1Device::Cuda, tr("GPU（CUDA）"));
+            });
+        });
+        let device = *selected;
+        if device != before {
+            self.model_error = None;
+        }
+        ui.label(RichText::new(tr("入力の判定はこの PC 内で行います")).small());
+        if let Some(download) = &self.model_download {
+            let received = download.received();
+            let total = download.total();
+            ui.add(
+                egui::ProgressBar::new(received as f32 / total.max(1) as f32).text(format!(
+                    "{:.0} / {:.0} MB",
+                    received as f64 / 1_000_000.,
+                    total as f64 / 1_000_000.
+                )),
+            );
+            if ui
+                .add_enabled(
+                    !download.cancelling(),
+                    Button::new(tr("ダウンロードを中止")),
+                )
+                .clicked()
+            {
+                download.cancel();
+            }
+            ui.ctx().request_repaint_after(Duration::from_millis(150));
+        } else if local_d1::installed(&self.directory, device) {
+            ui.label(tr("d1-2B Q4_K_M をダウンロード済み"));
+        } else {
+            let bytes = local_d1::required_bytes(&self.directory, device) as f64;
+            let label = if local_d1::model_available(&self.directory) {
+                tr_args(
+                    "推論エンジンをダウンロード（約 {0} MB）",
+                    &[&format!("{:.0}", bytes / 1_000_000.)],
+                )
+            } else {
+                tr_args(
+                    "モデルをダウンロード（約 {0} GB）",
+                    &[&format!("{:.1}", bytes / 1_000_000_000.)],
+                )
+            };
+            if ui.button(label).clicked() {
+                let context = ui.ctx().clone();
+                self.model_error = None;
+                match Download::start(self.directory.clone(), device, move || {
+                    context.request_repaint()
+                }) {
+                    Ok(download) => self.model_download = Some(download),
+                    Err(error) => self.model_error = Some(error),
+                }
+            }
+        }
+        ui.hyperlink_to(tr("モデルのライセンス"), local_d1::MODEL_LICENSE);
+        if let Some(error) = &self.model_error {
+            ui.label(
+                RichText::new(tr_args(
+                    "モデルを取得できませんでした ({0})",
+                    &[&error.to_string()],
+                ))
+                .color(ERROR),
+            );
+        }
+    }
+
+    fn calibration_panel(&mut self, ui: &mut Ui) {
+        let Some(key) = self.draft.typo.calibration_key().map(str::to_owned) else {
+            return;
+        };
+        let profile = self
+            .draft
+            .typo
+            .calibration
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        let mut limits = profile.limits();
+        let mut overrides = profile.overrides;
+        let previous = overrides.clone();
+        ui.add_space(8.);
+        ui.label(RichText::new(tr("キャリブレーション")).color(SECONDARY));
+        if let Some(measurement) = profile.measurement {
+            ui.label(tr_args(
+                "逐次 p95 {0} ms · 選択時 p95 {1} ms · 実測 {2} req/s",
+                &[
+                    &measurement.sequential_p95_ms.to_string(),
+                    &measurement.p95_ms.to_string(),
+                    &format!("{:.2}", measurement.throughput),
+                ],
+            ));
+        }
+        let stale = self
+            .draft
+            .typo
+            .calibration
+            .get(&key)
+            .is_none_or(|p| p.stale(calibration::now_seconds()));
+        let measuring = self.calibration_job.is_some();
+        if ui
+            .add_enabled(
+                !measuring && stale && self.can_calibrate(&self.draft.typo),
+                Button::new(tr("負荷を測定")),
+            )
+            .clicked()
+        {
+            let mut typo = self.draft.typo.clone();
+            let result = typo
+                .api_key_scope()
+                .map_or(Ok(()), |scope| self.apply_api_key_edit(&mut typo, &scope));
+            if let Err(error) = result {
+                self.calibration_error = Some((key.clone(), error));
+            } else {
+                self.start_calibration(typo);
+            }
+        }
+        if self
+            .calibration_job
+            .as_ref()
+            .is_some_and(|(target, _)| target == &key)
+        {
+            ui.label(tr("計測中（最大 60 秒）"));
+        } else if let Some((target, error)) = &self.calibration_error
+            && target == &key
+        {
+            ui.label(
+                RichText::new(tr_args("計測に失敗しました ({0})", &[&error.to_string()]))
+                    .color(ERROR),
+            );
+        }
+        let max_rate = limits.requests_per_second.max(100.0);
+        if ui
+            .add(
+                egui::Slider::new(&mut limits.concurrent, 1..=calibration::MAX_CONCURRENCY)
+                    .text(tr("最大同時数")),
+            )
+            .changed()
+        {
+            overrides.concurrent = Some(limits.concurrent);
+        }
+        if ui
+            .add(
+                egui::Slider::new(&mut limits.requests_per_second, 0.01..=max_rate)
+                    .logarithmic(true)
+                    .max_decimals(2)
+                    .suffix(" req/s")
+                    .text(tr("最大送信レート")),
+            )
+            .changed()
+        {
+            overrides.requests_per_second = Some(limits.requests_per_second);
+        }
+        if ui
+            .add(
+                egui::Slider::new(
+                    &mut limits.debounce_ms,
+                    calibration::MIN_DEBOUNCE_MS..=calibration::MAX_DEBOUNCE_MS,
+                )
+                .suffix(" ms")
+                .text(tr("入力待ち時間")),
+            )
+            .changed()
+        {
+            overrides.debounce_ms = Some(limits.debounce_ms);
+        }
+        if previous != Default::default() && ui.button(tr("自動設定に戻す")).clicked() {
+            overrides = Default::default();
+        }
+        if overrides != previous {
+            self.draft
+                .typo
+                .calibration
+                .entry(key)
+                .or_default()
+                .overrides = overrides;
+        }
+    }
+
+    fn can_calibrate(&self, typo: &TypoSettings) -> bool {
+        typo.calibration_key().is_some()
+            && if typo.provider == TypoProvider::D1Local {
+                local_d1::installed(&self.directory, typo.d1_device)
+            } else {
+                vime::system_one::valid_url(typo.endpoint())
+            }
+    }
+
+    fn start_calibration(&mut self, typo: TypoSettings) {
+        let Some(key) = typo.calibration_key().map(str::to_owned) else {
+            return;
+        };
+        self.calibration_attempts
+            .insert(key.clone(), Instant::now());
+        self.calibration_error = None;
+        match self.keyboard.calibrate(typo, &self.directory) {
+            Ok(job) => self.calibration_job = Some((key, job)),
+            Err(error) => self.calibration_error = Some((key, error)),
+        }
+    }
+
+    fn poll_calibration(&mut self, context: &egui::Context) {
+        if let Some(result) = self
+            .calibration_job
+            .as_ref()
+            .and_then(|(_, job)| job.result())
+        {
+            let (key, _) = self.calibration_job.take().unwrap();
+            let result = result.and_then(|measurement| {
+                let mut settings = self.settings.clone();
+                settings
+                    .typo
+                    .calibration
+                    .entry(key.clone())
+                    .or_default()
+                    .measurement = Some(measurement);
+                settings.save(&self.directory)?;
+                self.settings = settings;
+                self.draft
+                    .typo
+                    .calibration
+                    .entry(key.clone())
+                    .or_default()
+                    .measurement = Some(measurement);
+                self.keyboard
+                    .configure_typo(&self.settings.typo, &self.directory);
+                Ok(())
+            });
+            if let Err(error) = result {
+                self.calibration_error = Some((key, error));
+            }
+            self.keyboard.warm_local_typo();
+        }
+        let now = Instant::now();
+        if now >= self.calibration_check {
+            self.calibration_check = now + Duration::from_secs(60);
+            let typo = &self.settings.typo;
+            if self.calibration_job.is_none()
+                && self.can_calibrate(typo)
+                && let Some(key) = typo.calibration_key()
+                && typo
+                    .calibration
+                    .get(key)
+                    .is_none_or(|profile: &Profile| profile.stale(calibration::now_seconds()))
+                && self
+                    .calibration_attempts
+                    .get(key)
+                    .is_none_or(|attempt| now.duration_since(*attempt) >= Duration::from_secs(3600))
+            {
+                self.start_calibration(typo.clone());
+            }
+        }
+        context.request_repaint_after(self.calibration_check.saturating_duration_since(now));
+    }
+}
+
+fn system_one_field(value: &mut String) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(value)
+        .align(egui::Align2::LEFT_CENTER)
+        .margin(Margin {
+            left: 8,
+            right: 8,
+            top: 6,
+            bottom: 4,
+        })
+        .min_size(egui::vec2(0., 30.))
+        .desired_width(420.)
+}
+
+fn api_key_input<'a>(value: &'a mut String, placeholder: &str) -> egui::TextEdit<'a> {
+    system_one_field(value)
+        .password(true)
+        .hint_text(placeholder)
+}
+
+fn editable_api_key_scope(typo: &TypoSettings) -> Option<String> {
+    typo.api_key_scope()
+        .filter(|_| vime::system_one::valid_url(typo.endpoint()))
 }
 
 impl eframe::App for App {
     fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(result) = self.model_download.as_ref().and_then(Download::result) {
+            self.model_download = None;
+            self.model_error = result
+                .err()
+                .filter(|error| error.kind() != std::io::ErrorKind::Interrupted);
+            if local_d1::installed(&self.directory, self.settings.typo.d1_device) {
+                self.calibration_check = Instant::now();
+                self.keyboard.warm_local_typo();
+            }
+        }
+        self.poll_calibration(context);
         if i18n::language() != self.draft.language {
             // The language picker takes effect at once; saving only remembers it.
             i18n::set_language(self.draft.language);
@@ -627,10 +1163,6 @@ impl eframe::App for App {
             self.dashboard.redraw = true;
         }
         self.keyboard.poll_candidates();
-        let held = self.dashboard.held.clone();
-        if let Some(action) = self.repeaters[DASHBOARD].tick(held.as_ref(), Instant::now()) {
-            self.keyboard_action(action);
-        }
         if std::mem::take(&mut self.auto_connect) {
             self.connect();
         }
@@ -677,9 +1209,14 @@ impl eframe::App for App {
                         })
                     });
                     self.world_key_presses(frame.keyboard_presses);
-                    self.world_key_repeats();
+                    self.world_key_repeats(frame.keyboard_down);
                 }
             }
+        }
+        if self.dashboard.held_key().is_some()
+            && let Some(action) = self.repeaters[DASHBOARD].repeat_while(true, Instant::now())
+        {
+            self.keyboard_action(action);
         }
         let now = Instant::now();
         let (caret_visible, blink_after) = self.keyboard.caret_blink(now);
@@ -729,13 +1266,30 @@ impl eframe::App for App {
             return;
         }
         // The root ui is rebuilt by eframe, including after a hidden-window VR frame.
+        let margin = if ui.available_width() >= WIDE_LAYOUT {
+            Margin::symmetric(27, 18)
+        } else {
+            Margin::symmetric(14, 12)
+        };
         Frame::new()
             .fill(BACKGROUND)
-            .inner_margin(Margin::symmetric(27, 18))
+            .inner_margin(margin)
             .show(ui, |ui| {
                 ScrollArea::vertical()
                     .auto_shrink([false; 2])
-                    .show(ui, |ui| self.page(ui));
+                    .show(ui, |ui| {
+                        let width = ui.available_width().min(MAX_PAGE_WIDTH);
+                        ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(width, 0.),
+                                Layout::top_down(Align::Min),
+                                |ui| {
+                                    ui.set_width(width);
+                                    self.page(ui);
+                                },
+                            );
+                        });
+                    });
             });
     }
 
@@ -828,4 +1382,43 @@ fn read_font(folder: &Path, file: &str, index: u32) -> Option<Arc<FontData>> {
     let mut data = FontData::from_owned(fs::read(folder.join(file)).ok()?);
     data.index = index;
     Some(Arc::new(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_url_and_masked_key_fields_accept_paste() {
+        for (password, pasted) in [
+            (false, "http://127.0.0.1:8080/v1/systemone"),
+            (true, "synthetic-test-key"),
+        ] {
+            let context = egui::Context::default();
+            let mut value = String::new();
+            let mut render = |events, focus| {
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let field = if password {
+                            api_key_input(&mut value, "API key")
+                        } else {
+                            system_one_field(&mut value)
+                        };
+                        let response = ui.add(field.id_salt("paste_test"));
+                        if focus {
+                            response.request_focus();
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+            };
+            render(Vec::new(), true);
+            render(vec![egui::Event::Paste(pasted.into())], false);
+            assert_eq!(value, pasted);
+        }
+    }
 }

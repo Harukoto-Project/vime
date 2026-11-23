@@ -1,10 +1,23 @@
 mod microsoft_ime;
+mod sound;
+mod spellcheck;
+mod typo;
 mod view;
 
 use microsoft_ime::{Clause, Lookup};
-use std::time::{Duration, Instant};
-use vime::ime::{Composer, Language};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
+use typo::{Snapshot, Typo};
+use vime::{
+    ime::{Composer, Language},
+    settings::{TypoProvider, TypoSettings},
+};
 
+pub use sound::play_click;
+pub use typo::CalibrationJob;
+pub(crate) use typo::{Pair as LearnedTypo, load_learned_typos};
 pub use view::{ASPECT, SIZE, VrKeys, show, show_vr};
 
 #[derive(Clone, Debug)]
@@ -12,6 +25,7 @@ pub enum Action {
     Key(char),
     Language(Language),
     Candidate(String),
+    CorrectTypo(String),
     Insert(String),
     Backspace,
     Commit,
@@ -75,26 +89,21 @@ impl Repeater {
             self.begin(action, now);
             return Some(action.clone());
         }
-        self.follow(held, now)
+        self.repeat_while(held.is_some(), now)
     }
 
-    /// Continues a hold started with `begin`. Moving onto another key does not
-    /// start repeating it, because its press was never delivered.
-    pub fn follow(&mut self, held: Option<&Action>, now: Instant) -> Option<Action> {
-        match (&mut self.held, held) {
-            (Some((current, next)), Some(action)) if current.same_key(action) => {
-                if now >= *next {
-                    *next = now + REPEAT_INTERVAL;
-                    Some(action.clone())
-                } else {
-                    None
-                }
-            }
-            _ => {
-                self.held = None;
-                None
-            }
+    /// Repeats the key captured at press time while its button stays down.
+    pub fn repeat_while(&mut self, down: bool, now: Instant) -> Option<Action> {
+        if !down {
+            self.release();
+            return None;
         }
+        let (action, next) = self.held.as_mut()?;
+        if now < *next {
+            return None;
+        }
+        *next = now + REPEAT_INTERVAL;
+        Some(action.clone())
     }
 
     /// How long until the held key repeats again.
@@ -121,6 +130,8 @@ pub struct Keyboard {
     pub revision: u64,
     clauses: Option<(String, Vec<Clause>)>,
     ime: Lookup,
+    typo: Option<Typo>,
+    context: eframe::egui::Context,
 }
 
 impl Keyboard {
@@ -140,7 +151,56 @@ impl Keyboard {
             status: String::new(),
             revision: 0,
             clauses: None,
-            ime: Lookup::start(context),
+            ime: Lookup::start(context.clone()),
+            typo: None,
+            context,
+        }
+    }
+
+    pub fn configure_typo(&mut self, settings: &TypoSettings, directory: &Path) {
+        if settings.provider != TypoProvider::Off && self.typo.is_none() {
+            self.typo = Some(Typo::start(directory.to_owned(), self.context.clone()));
+        }
+        if let Some(typo) = &mut self.typo {
+            typo.configure(settings);
+        }
+    }
+
+    pub fn typo_suggestion(&self) -> Option<&str> {
+        self.typo
+            .as_ref()?
+            .suggestion
+            .as_ref()
+            .map(|suggestion| suggestion.word.as_str())
+    }
+
+    pub(crate) fn learned_typos_revision(&self) -> u64 {
+        self.typo.as_ref().map_or(0, |typo| typo.saved_revision)
+    }
+
+    pub fn warm_local_typo(&self) {
+        if let Some(typo) = &self.typo {
+            typo.warm_local();
+        }
+    }
+
+    pub fn calibrate(
+        &mut self,
+        settings: TypoSettings,
+        directory: &Path,
+    ) -> std::io::Result<CalibrationJob> {
+        self.typo
+            .get_or_insert_with(|| Typo::start(directory.to_owned(), self.context.clone()))
+            .calibrate(settings)
+    }
+
+    pub fn typo_error(&self) -> Option<&std::io::Error> {
+        self.typo.as_ref()?.error.as_ref()
+    }
+
+    pub fn finish_typo_edit(&mut self) {
+        if let Some(typo) = &mut self.typo {
+            typo.finish_edit(&self.composer);
         }
     }
 
@@ -151,6 +211,9 @@ impl Keyboard {
     }
 
     pub fn clear(&mut self) {
+        if let Some(typo) = &mut self.typo {
+            typo.reset();
+        }
         self.composer.clear();
         self.candidates.clear();
         self.candidate_selected = None;
@@ -178,7 +241,7 @@ impl Keyboard {
         if self.composer.converting() {
             view::CONVERSION_PAGE_SIZE
         } else {
-            view::CANDIDATE_PAGE_SIZE
+            view::CANDIDATE_PAGE_SIZE - usize::from(self.typo_suggestion().is_some())
         }
     }
 
@@ -201,6 +264,7 @@ impl Keyboard {
                 | Action::Insert(_)
                 | Action::Language(_)
                 | Action::Candidate(_)
+                | Action::CorrectTypo(_)
                 | Action::Backspace
                 | Action::Commit
                 | Action::MoveCaret(_)
@@ -209,6 +273,21 @@ impl Keyboard {
                 | Action::Space
                 | Action::Clear
         );
+        let deleting = matches!(action, Action::Backspace) && !was_converting;
+        let typing = matches!(action, Action::Key(key) if key.is_alphanumeric() || matches!(key, '\'' | '’'));
+        let clearing = matches!(action, Action::Clear);
+        let character =
+            matches!(action, Action::Key(_)) && self.composer.text().chars().count() < 512;
+        let snapshot = (editing && self.typo.as_ref().is_some_and(Typo::enabled))
+            .then(|| Snapshot::of(&self.composer));
+        if snapshot.is_some()
+            && !deleting
+            && !typing
+            && !clearing
+            && !matches!(action, Action::CorrectTypo(_))
+        {
+            self.finish_typo_edit();
+        }
         match action {
             Action::Key(key) if self.composer.text().chars().count() < 512 => {
                 if self.direct_input() {
@@ -231,6 +310,15 @@ impl Keyboard {
                 self.composer.pick_candidate(&value);
             }
             Action::Candidate(value) => self.composer.select(&value),
+            Action::CorrectTypo(value) => {
+                if let Some(typo) = &mut self.typo
+                    && let Some(suggestion) = &typo.suggestion
+                    && suggestion.word == value
+                {
+                    self.composer.replace_text(suggestion.range.clone(), &value);
+                    typo.reset();
+                }
+            }
             Action::Backspace => self.composer.backspace(),
             Action::Commit => self.composer.commit(),
             Action::MoveCaret(index) => self.composer.move_caret(index),
@@ -255,6 +343,18 @@ impl Keyboard {
             }
             Action::Clear => self.clear(),
             Action::Key(_) | Action::Insert(_) | Action::Space | Action::Enter | Action::Close => {}
+        }
+        if let Some(snapshot) = snapshot
+            && let Some(typo) = &mut self.typo
+        {
+            if was_converting || self.composer.converting() {
+                typo.reset();
+            } else if !clearing {
+                let after = Snapshot::of(&self.composer);
+                if character || snapshot != after {
+                    typo.changed(deleting.then_some(snapshot), typing, after);
+                }
+            }
         }
         if self.composer.converting() {
             if !paging {
@@ -324,6 +424,12 @@ impl Keyboard {
     }
 
     pub fn poll_candidates(&mut self) {
+        if let Some(typo) = &mut self.typo
+            && typo.poll(&self.composer)
+        {
+            self.candidate_page = 0;
+            self.revision = self.revision.wrapping_add(1);
+        }
         let Some((reading, clauses)) = self.ime.latest() else {
             return;
         };
@@ -373,20 +479,24 @@ mod tests {
     }
 
     #[test]
-    fn a_followed_hold_needs_its_press_to_start() {
+    fn repeats_the_original_key_until_button_release() {
         let start = Instant::now();
-        let mut repeater = Repeater::default();
-        let late = start + REPEAT_DELAY * 2;
-        assert!(repeater.follow(Some(&Action::Space), late).is_none());
-        repeater.begin(&Action::Space, start);
-        assert!(
-            repeater
-                .follow(Some(&Action::Space), start + REPEAT_DELAY)
-                .is_some()
-        );
-        // Sliding onto another key ends the hold instead of repeating it.
-        assert!(repeater.follow(Some(&Action::Backspace), late).is_none());
-        assert!(!repeater.holding(&Action::Space));
+        for key in [Action::Backspace, Action::Space] {
+            let mut repeater = Repeater::default();
+            let first_repeat = start + REPEAT_DELAY;
+            let next_repeat = first_repeat + REPEAT_INTERVAL;
+            assert!(repeater.repeat_while(true, start).is_none());
+            repeater.begin(&key, start);
+            assert!(repeater.repeat_while(true, start).is_none());
+            assert!(
+                repeater
+                    .repeat_while(true, first_repeat)
+                    .unwrap()
+                    .same_key(&key)
+            );
+            assert!(repeater.repeat_while(false, next_repeat).is_none());
+            assert!(repeater.repeat_while(true, next_repeat).is_none());
+        }
     }
 
     #[test]

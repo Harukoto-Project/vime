@@ -31,6 +31,7 @@ pub struct Pointer {
 pub struct Frame {
     pub toggle: bool,
     pub keyboard_presses: [Option<[f32; 2]>; 2],
+    pub keyboard_down: [bool; 2],
     pub pointers: [Option<Pointer>; 2],
     pub dashboard_visible: bool,
     pub dashboard_active: bool,
@@ -421,9 +422,15 @@ impl SteamVr {
         if let Some(panel) = self.panel.filter(|_| pointing) {
             let now = Instant::now();
             for hand in 0..2 {
-                let (pointer, press) = self.pointer(hand, &panel, aspect, now);
-                frame.pointers[hand] = pointer;
-                frame.keyboard_presses[hand] = press;
+                let click = self.digital(self.click_action, self.hands[hand]);
+                let down = click.as_ref().is_some_and(|data| data.state);
+                let pressed = self.armed[hand] && down;
+                self.armed[hand] = click.is_some_and(|data| !data.state);
+                frame.keyboard_down[hand] = down;
+                if let Some(uv) = self.pointer_position(hand, &panel, aspect, now) {
+                    frame.pointers[hand] = Some(Pointer { uv, down });
+                    frame.keyboard_presses[hand] = pressed.then_some(uv);
+                }
             }
         } else {
             self.clear_pointers();
@@ -432,18 +439,14 @@ impl SteamVr {
         frame
     }
 
-    fn pointer(
+    fn pointer_position(
         &mut self,
         hand: usize,
         panel: &Matrix,
         aspect: f32,
         now: Instant,
-    ) -> (Option<Pointer>, Option<[f32; 2]>) {
+    ) -> Option<[f32; 2]> {
         let source = self.hands[hand];
-        let click = self.digital(self.click_action, source);
-        let down = click.as_ref().is_some_and(|data| data.state);
-        let pressed = self.armed[hand] && down;
-        self.armed[hand] = click.is_some_and(|data| !data.state);
 
         let mut pose = ActionPose::default();
         let code = self.input.aim(
@@ -456,14 +459,13 @@ impl SteamVr {
         );
         if code != 0 || !pose.active || !pose.pose.valid {
             self.pointer_filters[hand].reset();
-            return (None, None);
+            return None;
         }
         let Some(uv) = geometry::hit(panel, &pose.pose.transform, self.width, aspect) else {
             self.pointer_filters[hand].reset();
-            return (None, None);
+            return None;
         };
-        let uv = self.pointer_filters[hand].update(uv, now, aspect);
-        (Some(Pointer { uv, down }), pressed.then_some(uv))
+        Some(self.pointer_filters[hand].update(uv, now, aspect))
     }
 
     fn clear_pointers(&mut self) {

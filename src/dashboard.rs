@@ -42,7 +42,7 @@ pub struct Dashboard {
     down: bool,
     events: Vec<Event>,
     /// The repeating key the pointer is holding down.
-    pub held: Option<Action>,
+    held: Option<Action>,
     pub active: bool,
     pub redraw: bool,
 }
@@ -99,6 +99,10 @@ impl Dashboard {
 
     pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
+    }
+
+    pub fn held_key(&self) -> Option<&Action> {
+        self.held.as_ref().filter(|_| self.active && self.down)
     }
 
     fn leave(&mut self) {
