@@ -28,6 +28,7 @@ const INK: Color32 = Color32::from_rgb(241, 245, 251);
 const SECONDARY: Color32 = Color32::from_rgb(176, 192, 209);
 const ACCENT: Color32 = Color32::from_rgb(159, 211, 255);
 const ERROR: Color32 = Color32::from_rgb(255, 177, 168);
+const HIDDEN_PAINT_RETRY: Duration = Duration::from_millis(50);
 
 pub fn run() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -66,7 +67,8 @@ struct App {
     last_world: Option<(u64, Destination, bool)>,
     pointers: [Option<Pointer>; 2],
     last_pointers: [Option<Pointer>; 2],
-    paint_requested: bool,
+    paint_requested: Option<Instant>,
+    dashboard_visible: bool,
     dashboard_revision: Option<(u64, bool)>,
     draw_errors: [Option<String>; 2],
     steamvr_message: String,
@@ -145,7 +147,8 @@ impl App {
             last_world: None,
             pointers: [None; 2],
             last_pointers: [None; 2],
-            paint_requested: false,
+            paint_requested: None,
+            dashboard_visible: false,
             dashboard_revision: None,
             draw_errors: [None, None],
             steamvr_message: String::new(),
@@ -227,6 +230,8 @@ impl App {
         self.pointers = [None; 2];
         self.last_pointers = [None; 2];
         self.dashboard.reset();
+        self.dashboard_visible = false;
+        self.paint_requested = None;
         self.draw_errors = [None, None];
         if let Ok(surfaces) = &mut self.surfaces {
             surfaces.keyboard.reset();
@@ -614,6 +619,28 @@ impl eframe::App for App {
                 self.disconnect();
                 self.steamvr_message = "SteamVR との接続が終了しました".into();
             } else {
+                let resume_world =
+                    self.dashboard_visible && !frame.dashboard_visible && vr.visible();
+                let resume_dashboard = !self.dashboard.active && frame.dashboard_active;
+                self.dashboard_visible = frame.dashboard_visible;
+                if let Ok(surfaces) = &mut self.surfaces {
+                    // Retry timing from a hidden overlay must not carry over when it reappears.
+                    if resume_world {
+                        surfaces.keyboard.reset();
+                        self.pending_world_keys = None;
+                        self.last_world = None;
+                        self.draw_errors[0] = None;
+                    }
+                    if resume_dashboard {
+                        surfaces.dashboard.reset();
+                        self.draw_errors[1] = None;
+                    }
+                }
+                if resume_world || resume_dashboard {
+                    self.paint_requested = None;
+                    self.diagnostics.counters.world_resumes += u64::from(resume_world);
+                    self.diagnostics.counters.dashboard_resumes += u64::from(resume_dashboard);
+                }
                 self.dashboard
                     .feed(frame.dashboard_active, frame.dashboard_events);
                 if frame.toggle {
@@ -655,8 +682,12 @@ impl eframe::App for App {
                     || (self.dashboard.active
                         && self.dashboard_revision
                             != Some((self.keyboard.revision, caret_visible))));
-            if (keyboard_changed || dashboard_changed) && !self.paint_requested {
-                self.paint_requested = true;
+            if (keyboard_changed || dashboard_changed)
+                && self
+                    .paint_requested
+                    .is_none_or(|last| now - last >= HIDDEN_PAINT_RETRY)
+            {
+                self.paint_requested = Some(now);
                 self.diagnostics.counters.paint_requests += 1;
                 context.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
             }
@@ -683,7 +714,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let started = Instant::now();
         self.diagnostics.start_ui(started);
-        self.paint_requested = false;
+        self.paint_requested = None;
         self.paint_overlay();
         if ui.input(|input| input.viewport().minimized == Some(true)) {
             self.diagnostics.counters.ui.observe(started.elapsed());

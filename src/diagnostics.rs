@@ -132,6 +132,8 @@ pub struct Counters {
     pub dashboard_events: u64,
     pub dashboard_vis_changes: u64,
     pub dashboard_active_changes: u64,
+    pub world_resumes: u64,
+    pub dashboard_resumes: u64,
     pub input_errors: u64,
     pub last_input_error: Option<i32>,
     pub world_submit_errors: u64,
