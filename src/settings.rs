@@ -36,6 +36,21 @@ mod tests {
     }
 
     #[test]
+    fn is_set_up_once_settings_are_saved_and_proposes_local_cuda_d1() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(!Settings::saved(directory.path()));
+        let mut settings = Settings::default();
+        // Nothing is switched on by default; the welcome page proposes it.
+        assert_eq!(settings.typo.provider, TypoProvider::Off);
+        settings.typo = TypoSettings::recommended();
+        assert_eq!(settings.typo.provider, TypoProvider::D1Local);
+        assert_eq!(settings.typo.d1_device, D1Device::Cuda);
+        assert_eq!(settings.typo.calibration_key(), Some("local:d1-2b:cuda"));
+        settings.save(directory.path()).unwrap();
+        assert!(Settings::saved(directory.path()));
+    }
+
+    #[test]
     fn preserves_the_remote_d1_setting_and_saves_the_local_mode_without_a_url() {
         let prior: Settings = serde_json::from_str(r#"{"typo":{"provider":"d1"}}"#).unwrap();
         assert_eq!(prior.typo.provider, TypoProvider::D1);
@@ -201,6 +216,15 @@ pub struct TypoSettings {
 }
 
 impl TypoSettings {
+    /// What the welcome page proposes: the built-in d1-2B on an NVIDIA GPU.
+    pub fn recommended() -> Self {
+        Self {
+            provider: TypoProvider::D1Local,
+            d1_device: D1Device::Cuda,
+            ..Self::default()
+        }
+    }
+
     pub fn calibration_key(&self) -> Option<&str> {
         match self.provider {
             TypoProvider::D1Local => Some(match self.d1_device {
@@ -293,6 +317,11 @@ impl Settings {
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, tr("LOCALAPPDATA が見つかりません"))
             })
+    }
+
+    /// Whether settings were ever saved here. Without them ViME has not been set up.
+    pub fn saved(path: &Path) -> bool {
+        path.join("settings.json").exists()
     }
 
     pub fn load(path: &Path) -> io::Result<Self> {

@@ -157,3 +157,11 @@ CUDA 推論を開始できません。対応する NVIDIA GPU、ドライバー�
 誤変換データを取得できませんでした ({0})	Could not get the misconversion data ({0})	오변환 데이터를 받을 수 없습니다 ({0})
 誤変換データを展開できませんでした	Could not unpack the misconversion data	오변환 데이터의 압축을 풀 수 없습니다
 誤変換データを集計できませんでした	Could not count the misconversion data	오변환 데이터를 집계할 수 없습니다
+ViME へようこそ	Welcome to ViME	ViME에 오신 것을 환영합니다
+ダウンロードは完了を待たずに先へ進めます。進み具合は設定画面に表示されます	You can continue without waiting for downloads. Progress is shown in Settings.	다운로드가 끝나기를 기다리지 않고 계속할 수 있습니다. 진행 상황은 설정 화면에 표시됩니다.
+あとで設定する	Set up later	나중에 설정
+はじめに誤字修正を設定します。あとから設定画面でいつでも変えられます。	First, set up typo correction. You can change it any time in Settings.	먼저 오타 수정을 설정합니다. 나중에 설정 화면에서 언제든 바꿀 수 있습니다.
+おすすめ設定で始める	Start with the recommended setup	추천 설정으로 시작
+d1-2B（ローカル・CUDA）と日本語の誤変換データを取得して始めます（約 {0} GB）	Gets d1-2B (local, CUDA) and the Japanese misconversion data, then starts (about {0} GB)	d1-2B(로컬·CUDA)와 일본어 오변환 데이터를 받아 시작합니다(약 {0} GB)
+または、自分で選ぶ	Or choose yourself	또는 직접 선택
+この内容で始める	Start with these choices	이 내용으로 시작

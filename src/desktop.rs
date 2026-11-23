@@ -40,6 +40,13 @@ const WIDE_LAYOUT: f32 = 640.;
 const MAX_PAGE_WIDTH: f32 = 1080.;
 const HIDDEN_PAINT_RETRY: Duration = Duration::from_millis(50);
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Welcome {
+    Recommended,
+    Chosen,
+    Later,
+}
+
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
 enum Page {
     #[default]
@@ -80,6 +87,8 @@ struct App {
     vr: Option<SteamVr>,
     auto_connect: bool,
     page: Page,
+    /// Shown until the first settings are saved.
+    welcome: bool,
     learned_typos: LearnedTypos,
     dashboard: Dashboard,
     world_keys: Option<VrKeys>,
@@ -146,6 +155,11 @@ impl App {
             ),
         };
         i18n::set_language(settings.language);
+        let welcome = !Settings::saved(&directory);
+        let mut draft = settings.clone();
+        if welcome {
+            draft.typo = TypoSettings::recommended();
+        }
 
         let fonts = windows_fonts();
         creation.egui_ctx.set_fonts(fonts.clone());
@@ -173,7 +187,7 @@ impl App {
         keyboard.configure_typo(&settings.typo, &directory);
         Ok(Self {
             directory,
-            draft: settings.clone(),
+            draft,
             settings,
             hotkeys,
             keyboard,
@@ -181,6 +195,7 @@ impl App {
             vr: None,
             auto_connect: true,
             page: Page::default(),
+            welcome,
             learned_typos: LearnedTypos::default(),
             dashboard: Dashboard::default(),
             world_keys: None,
@@ -544,6 +559,10 @@ impl App {
                 .size(15.)
                 .color(SECONDARY),
         );
+        if self.welcome {
+            self.welcome_panel(ui);
+            return;
+        }
         ui.add_space(17.);
         self.steamvr_panel(ui);
         ui.add_space(14.);
@@ -609,6 +628,125 @@ impl App {
         ui.label(RichText::new(hint).color(SECONDARY));
     }
 
+    fn start_model_download(&mut self, context: &egui::Context, device: D1Device) {
+        let context = context.clone();
+        self.model_error = None;
+        match Download::start(self.directory.clone(), device, move || {
+            context.request_repaint()
+        }) {
+            Ok(download) => self.model_download = Some(download),
+            Err(error) => self.model_error = Some(error),
+        }
+    }
+
+    fn start_misconversion_download(&mut self, context: &egui::Context) {
+        let context = context.clone();
+        self.misconversion_error = None;
+        match misconversions::Download::start(self.directory.clone(), move || {
+            context.request_repaint()
+        }) {
+            Ok(download) => self.misconversion_download = Some(download),
+            Err(error) => self.misconversion_error = Some(error),
+        }
+    }
+
+    fn welcome_panel(&mut self, ui: &mut Ui) {
+        ui.add_space(17.);
+        panel().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(RichText::new(tr("ViME へようこそ")).size(22.).strong());
+            ui.add_space(5.);
+            ui.label(tr(
+                "はじめに誤字修正を設定します。あとから設定画面でいつでも変えられます。",
+            ));
+            ui.add_space(10.);
+            let recommended = TypoSettings::recommended();
+            let bytes = local_d1::required_bytes(&self.directory, recommended.d1_device)
+                + if misconversions::installed(&self.directory) {
+                    0
+                } else {
+                    misconversions::DATA_BYTES
+                };
+            if ui
+                .add(primary(tr("おすすめ設定で始める")).min_size(egui::vec2(220., 34.)))
+                .clicked()
+            {
+                self.finish_welcome(Welcome::Recommended, ui.ctx());
+            }
+            ui.label(
+                RichText::new(tr_args(
+                    "d1-2B（ローカル・CUDA）と日本語の誤変換データを取得して始めます（約 {0} GB）",
+                    &[&format!("{:.1}", bytes as f64 / 1_000_000_000.)],
+                ))
+                .small()
+                .color(SECONDARY),
+            );
+            ui.add_space(10.);
+            ui.separator();
+            ui.add_space(10.);
+            ui.label(RichText::new(tr("または、自分で選ぶ")).color(SECONDARY));
+            ui.add_space(4.);
+            self.typo_settings(ui);
+            ui.add_space(10.);
+            ui.label(
+                RichText::new(tr(
+                    "ダウンロードは完了を待たずに先へ進めます。進み具合は設定画面に表示されます",
+                ))
+                .small()
+                .color(SECONDARY),
+            );
+            ui.add_space(5.);
+            if self.settings_error {
+                ui.label(RichText::new(&self.settings_message).small().color(ERROR));
+                // Another app may hold the shortcut, and Settings is out of reach here.
+                ui.label(tr("Windows 開閉ショートカット"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.draft.hotkey)
+                        .hint_text("Ctrl+Shift+F8")
+                        .desired_width(200.),
+                );
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.button(tr("この内容で始める")).clicked() {
+                    self.finish_welcome(Welcome::Chosen, ui.ctx());
+                }
+                if ui.button(tr("あとで設定する")).clicked() {
+                    self.finish_welcome(Welcome::Later, ui.ctx());
+                }
+            });
+        });
+    }
+
+    /// Saves what the welcome page chose. The recommended setup also starts
+    /// every download it needs, so nothing is left to do in Settings.
+    fn finish_welcome(&mut self, choice: Welcome, context: &egui::Context) {
+        match choice {
+            Welcome::Recommended => self.draft.typo = TypoSettings::recommended(),
+            Welcome::Later => self.draft.typo = TypoSettings::default(),
+            Welcome::Chosen => {}
+        }
+        match self.apply_settings() {
+            Ok(()) => {
+                self.welcome = false;
+                self.settings_error = false;
+                self.settings_message.clear();
+                if choice == Welcome::Recommended {
+                    let device = self.settings.typo.d1_device;
+                    if !local_d1::installed(&self.directory, device) {
+                        self.start_model_download(context, device);
+                    }
+                    if !misconversions::installed(&self.directory) {
+                        self.start_misconversion_download(context);
+                    }
+                }
+            }
+            Err(error) => {
+                self.settings_error = true;
+                self.settings_message = error;
+            }
+        }
+        self.dashboard.redraw = true;
+    }
     fn steamvr_panel(&mut self, ui: &mut Ui) {
         panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -775,7 +913,10 @@ impl App {
                 RichText::new(tr("判定時は対象の語と前後の一部が設定先へ送信されます")).small(),
             );
         }
-        self.calibration_panel(ui);
+        // The load test needs the model, so it waits until after the welcome page.
+        if !self.welcome {
+            self.calibration_panel(ui);
+        }
         self.misconversion_panel(ui);
         if self.draft.typo == self.settings.typo
             && let Some(error) = self.keyboard.typo_error()
@@ -921,14 +1062,7 @@ impl App {
                 )
             };
             if ui.button(label).clicked() {
-                let context = ui.ctx().clone();
-                self.model_error = None;
-                match Download::start(self.directory.clone(), device, move || {
-                    context.request_repaint()
-                }) {
-                    Ok(download) => self.model_download = Some(download),
-                    Err(error) => self.model_error = Some(error),
-                }
+                self.start_model_download(ui.ctx(), device);
             }
         }
         ui.hyperlink_to(tr("モデルのライセンス"), local_d1::MODEL_LICENSE);
@@ -1001,14 +1135,7 @@ impl App {
                 ))
                 .clicked()
             {
-                let context = ui.ctx().clone();
-                self.misconversion_error = None;
-                match misconversions::Download::start(self.directory.clone(), move || {
-                    context.request_repaint()
-                }) {
-                    Ok(download) => self.misconversion_download = Some(download),
-                    Err(error) => self.misconversion_error = Some(error),
-                }
+                self.start_misconversion_download(ui.ctx());
             }
         }
         ui.horizontal_wrapped(|ui| {
