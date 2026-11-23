@@ -2,7 +2,8 @@
 
 A virtual keyboard with IME for SteamVR. Type in Japanese, English, and Korean in VRChat.
 
-[Features](#features) · [Setup](#setup) · [Usage](#usage) · [License](#license)  
+[Features](#features) · [Setup](#setup) · [Usage](#usage) · [License](#license)
+
 [日本語](README.md) · [English](README.en.md) · [한국어](README.ko.md)
 
 ## Features
