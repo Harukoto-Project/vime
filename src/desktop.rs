@@ -61,11 +61,11 @@ struct App {
     dashboard: Dashboard,
     world_keys: Option<VrKeys>,
     pending_world_keys: Option<VrKeys>,
-    last_world: Option<(u64, Destination)>,
+    last_world: Option<(u64, Destination, bool)>,
     pointers: [Option<Pointer>; 2],
     last_pointers: [Option<Pointer>; 2],
     paint_requested: bool,
-    dashboard_revision: Option<u64>,
+    dashboard_revision: Option<(u64, bool)>,
     draw_errors: [Option<String>; 2],
     steamvr_message: String,
     settings_message: String,
@@ -252,7 +252,10 @@ impl App {
                     self.toggle();
                 }
             }
-            Action::Send => {
+            Action::Enter if self.keyboard.composer.has_preedit() => {
+                self.keyboard.apply(Action::Commit)
+            }
+            Action::Enter => {
                 let text = self.keyboard.composer.text();
                 let sent = match self.settings.destination {
                     Destination::Osc => {
@@ -282,13 +285,18 @@ impl App {
             return;
         };
         let now = Instant::now();
+        let (caret_visible, _) = self.keyboard.caret_blink(now);
         if vr.visible() && surfaces.keyboard.can_present(now) {
-            let frame = (self.keyboard.revision, self.settings.destination);
+            let frame = (
+                self.keyboard.revision,
+                self.settings.destination,
+                caret_visible,
+            );
             let keyboard_changed = self.last_world != Some(frame);
             if keyboard_changed {
                 self.last_world = Some(frame);
                 self.pending_world_keys = Some(surfaces.keyboard.render(Vec::new(), |ui| {
-                    keyboard::show_vr(ui, &self.keyboard, self.settings.destination)
+                    keyboard::show_vr(ui, &self.keyboard, self.settings.destination, caret_visible)
                 }));
             }
             if keyboard_changed
@@ -319,7 +327,7 @@ impl App {
         }
 
         let mut command = None;
-        let revision = Some(self.keyboard.revision);
+        let revision = Some((self.keyboard.revision, caret_visible));
         if surfaces.dashboard.can_present(now)
             && (self.dashboard.redraw
                 || (self.dashboard.active && self.dashboard_revision != revision))
@@ -334,6 +342,7 @@ impl App {
                     &self.settings,
                     &mut self.draft,
                     &self.settings_message,
+                    caret_visible,
                 )
             });
         }
@@ -360,9 +369,9 @@ impl App {
             return;
         };
         let actions = presses.map(|point| point.and_then(|point| keys.action_at(point)));
-        let mut sent = false;
+        let mut entered = false;
         for action in actions.into_iter().flatten() {
-            if matches!(action, Action::Send) && std::mem::replace(&mut sent, true) {
+            if matches!(action, Action::Enter) && std::mem::replace(&mut entered, true) {
                 continue;
             }
             let close = matches!(action, Action::Close);
@@ -409,7 +418,13 @@ impl App {
         });
         ui.add_space(5.);
         let width = ui.available_width().min(900.);
-        if let Some(action) = keyboard::show(ui, &self.keyboard, width, self.settings.destination) {
+        if let Some(action) = keyboard::show(
+            ui,
+            &self.keyboard,
+            width,
+            self.settings.destination,
+            self.keyboard.caret_blink(Instant::now()).0,
+        ) {
             self.keyboard_action(action);
             ui.ctx().request_repaint();
         }
@@ -566,19 +581,30 @@ impl eframe::App for App {
                 }
             }
         }
+        let now = Instant::now();
+        let (caret_visible, blink_after) = self.keyboard.caret_blink(now);
+        let desktop_minimized = context.input(|input| input.viewport().minimized == Some(true));
+        if !desktop_minimized {
+            context.request_repaint_after(blink_after);
+        }
         if let (Some(vr), Ok(surfaces)) = (&self.vr, &self.surfaces) {
             let visible = vr.visible() || self.dashboard.active;
-            let now = Instant::now();
             let keyboard_changed = vr.visible()
                 && surfaces.keyboard.can_present(now)
-                && (self.last_world != Some((self.keyboard.revision, self.settings.destination))
+                && (self.last_world
+                    != Some((
+                        self.keyboard.revision,
+                        self.settings.destination,
+                        caret_visible,
+                    ))
                     || pointer_changed(&surfaces.keyboard, now, self.last_pointers, self.pointers)
                     || self.draw_errors[0].is_some());
             let dashboard_changed = surfaces.dashboard.can_present(now)
                 && (self.dashboard.redraw
                     || self.draw_errors[1].is_some()
                     || (self.dashboard.active
-                        && self.dashboard_revision != Some(self.keyboard.revision)));
+                        && self.dashboard_revision
+                            != Some((self.keyboard.revision, caret_visible))));
             if (keyboard_changed || dashboard_changed) && !self.paint_requested {
                 self.paint_requested = true;
                 context.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);

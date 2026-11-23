@@ -20,6 +20,20 @@ pub fn kana(input: &str, finalizing: bool) -> String {
     let mut rest = input;
     while let Some(&first) = rest.as_bytes().first() {
         let next = rest.as_bytes().get(1).copied();
+        // A bare run of three or more n's is literal. Keep the explicit nn and n'
+        // rules and normal syllables such as the nn in こんにちは.
+        if rest.starts_with("nnn") {
+            let len = rest.bytes().take_while(|&byte| byte == b'n').count();
+            if rest
+                .as_bytes()
+                .get(len)
+                .is_none_or(|byte| !byte.is_ascii_alphabetic() && *byte != b'\'')
+            {
+                result.push_str(&rest[..len]);
+                rest = &rest[len..];
+                continue;
+            }
+        }
         if first == b'n' {
             match next {
                 Some(b'n')
@@ -49,7 +63,11 @@ pub fn kana(input: &str, finalizing: bool) -> String {
                 _ => {}
             }
         }
-        if next == Some(first) && first.is_ascii_lowercase() && !b"aiueonw".contains(&first) {
+        if next == Some(first)
+            && first.is_ascii_lowercase()
+            && !b"aiueon".contains(&first)
+            && syllable(&rest[1..]).is_some()
+        {
             result.push('っ');
             rest = &rest[1..];
             continue;
@@ -59,11 +77,7 @@ pub fn kana(input: &str, finalizing: bool) -> String {
             rest = &rest[1..];
             continue;
         }
-        if first.is_ascii_lowercase()
-            && let Some(&(roman, kana)) = SYLLABLES[(first - b'a') as usize]
-                .iter()
-                .find(|&&(roman, _)| rest.starts_with(roman))
-        {
+        if let Some((roman, kana)) = syllable(rest) {
             result.push_str(kana);
             rest = &rest[roman.len()..];
         } else {
@@ -73,6 +87,17 @@ pub fn kana(input: &str, finalizing: bool) -> String {
         }
     }
     result
+}
+
+fn syllable(rest: &str) -> Option<RomanSyllable> {
+    let first = *rest.as_bytes().first()?;
+    if !first.is_ascii_lowercase() {
+        return None;
+    }
+    SYLLABLES[(first - b'a') as usize]
+        .iter()
+        .copied()
+        .find(|(roman, _)| rest.starts_with(roman))
 }
 
 pub fn katakana(value: &str) -> String {
@@ -98,9 +123,14 @@ mod tests {
     use super::kana;
 
     #[test]
-    fn repeated_w_remains_literal_without_affecting_gemination() {
-        assert_eq!(kana("www", false), "www");
-        assert_eq!(kana("www", true), "www");
+    fn repeated_consonants_without_a_syllable_remain_literal() {
+        for consonant in "bcdfghjklmnpqrstvwxyz".chars() {
+            let input = consonant.to_string().repeat(3);
+            assert_eq!(kana(&input, false), input);
+            assert_eq!(kana(&input, true), input);
+        }
         assert_eq!(kana("kitte", true), "きって");
+        assert_eq!(kana("aaa", true), "あああ");
+        assert_eq!(kana("nn", true), "ん");
     }
 }

@@ -1,8 +1,10 @@
 use super::{Action, Keyboard};
+use eframe::egui::text::{CCursor, Galley};
 use eframe::egui::{
     self, Align, Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Sense, Shape, Stroke,
     StrokeKind, TextFormat, Ui, Vec2, text::LayoutJob,
 };
+use std::sync::Arc;
 use vime::{
     ime::{Language, hangul_key_label, search_emoji},
     output::CHAT_LIMIT,
@@ -24,17 +26,32 @@ pub fn show(
     keyboard: &Keyboard,
     width: f32,
     destination: Destination,
+    caret_visible: bool,
 ) -> Option<Action> {
-    draw(ui, keyboard, width, destination, false).0
+    draw(ui, keyboard, width, destination, false, caret_visible).0
 }
 
-pub fn show_vr(ui: &mut Ui, keyboard: &Keyboard, destination: Destination) -> VrKeys {
-    draw(ui, keyboard, SIZE[0] as f32, destination, true).1
+pub fn show_vr(
+    ui: &mut Ui,
+    keyboard: &Keyboard,
+    destination: Destination,
+    caret_visible: bool,
+) -> VrKeys {
+    draw(
+        ui,
+        keyboard,
+        SIZE[0] as f32,
+        destination,
+        true,
+        caret_visible,
+    )
+    .1
 }
 
 pub struct VrKeys {
     rect: Rect,
     keys: Vec<(Rect, Action)>,
+    editor: Option<EditorHit>,
 }
 
 impl VrKeys {
@@ -44,6 +61,11 @@ impl VrKeys {
 
     pub fn action_at(&self, uv: [f32; 2]) -> Option<Action> {
         let position = self.position(uv);
+        if let Some(editor) = &self.editor
+            && editor.area.contains(position)
+        {
+            return Some(editor.action(position));
+        }
         self.keys
             .iter()
             .filter(|(rect, _)| rect.expand(2.).contains(position))
@@ -61,6 +83,7 @@ fn draw(
     width: f32,
     destination: Destination,
     controller_input: bool,
+    caret_visible: bool,
 ) -> (Option<Action>, VrKeys) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, width / ASPECT), Sense::hover());
     let scale = rect.width() / SIZE[0] as f32;
@@ -71,13 +94,14 @@ fn draw(
         action: None,
         controller_input,
         keys: Vec::new(),
+        editor: None,
     };
     view.background();
     view.header(keyboard, controller_input);
-    view.editor(keyboard, destination);
+    view.editor(keyboard, destination, caret_visible);
     view.candidates(keyboard);
     if keyboard.emoji {
-        view.emoji(keyboard);
+        view.emoji(keyboard, destination);
     } else {
         view.keys(keyboard, destination);
     }
@@ -86,6 +110,7 @@ fn draw(
         VrKeys {
             rect,
             keys: view.keys,
+            editor: view.editor,
         },
     )
 }
@@ -97,6 +122,7 @@ struct Board<'a> {
     action: Option<Action>,
     controller_input: bool,
     keys: Vec<(Rect, Action)>,
+    editor: Option<EditorHit>,
 }
 
 #[derive(Clone, Copy)]
@@ -192,8 +218,7 @@ impl Board<'_> {
         }
     }
 
-    fn editor(&mut self, keyboard: &Keyboard, destination: Destination) {
-        let japanese = keyboard.composer.language() == Language::Japanese;
+    fn editor(&mut self, keyboard: &Keyboard, destination: Destination, caret_visible: bool) {
         let rect = self.box_at(22., 63., 816., 69.);
         let painter = self.ui.painter();
         painter.rect(
@@ -203,40 +228,94 @@ impl Board<'_> {
             Stroke::new(1., Color32::from_white_alpha(37)),
             StrokeKind::Inside,
         );
-        let text = keyboard.composer.committed();
+        let (before, after) = keyboard.composer.committed_parts();
         let preedit = keyboard.composer.preedit();
         let mut job = LayoutJob::default();
         let font = FontId::proportional(24. * self.scale);
-        if text.is_empty() && preedit.is_empty() {
-            job.append(
-                "メッセージを入力",
-                0.,
-                TextFormat::simple(font.clone(), SECONDARY),
-            );
-        } else {
-            job.append(text, 0., TextFormat::simple(font.clone(), INK));
-            job.append(
-                &preedit,
-                0.,
-                TextFormat {
-                    underline: Stroke::new(1.5 * self.scale, ACCENT),
-                    ..TextFormat::simple(font, ACCENT)
-                },
-            );
-        }
-        let text_area = self.box_at(36., 70., if japanese { 568. } else { 787. }, 38.);
+        job.append(before, 0., TextFormat::simple(font.clone(), INK));
+        job.append(
+            &preedit,
+            0.,
+            TextFormat {
+                underline: Stroke::new(1.5 * self.scale, ACCENT),
+                ..TextFormat::simple(font.clone(), ACCENT)
+            },
+        );
+        job.append(after, 0., TextFormat::simple(font.clone(), INK));
+        let text_area = self.box_at(36., 70., 657., 38.);
         let text_painter = painter.with_clip_rect(text_area);
         let galley = painter.layout_job(job);
-        let x = text_area.left() - (galley.size().x - text_area.width()).max(0.);
-        text_painter.galley(
-            Pos2::new(x, text_area.center().y - galley.size().y * 0.5),
-            galley,
-            INK,
+        let empty = before.is_empty() && preedit.is_empty() && after.is_empty();
+        let caret = galley.pos_from_cursor(CCursor::new(
+            before.chars().count() + preedit.chars().count(),
+        ));
+        let scroll = (caret.min.x + 5. * self.scale - text_area.width()).max(0.);
+        let origin = Pos2::new(
+            text_area.left() + self.scale - scroll,
+            text_area.center().y - galley.size().y * 0.5,
         );
-        if destination == Destination::Osc {
-            let count = text.encode_utf16().count() + preedit.encode_utf16().count();
+        text_painter.galley(origin, galley.clone(), INK);
+        if empty {
             self.label(
-                self.box_at(if japanese { 525. } else { 744. }, 107., 79., 18.),
+                text_area.translate(Vec2::new(7. * self.scale, 0.)),
+                Align2::LEFT_CENTER,
+                "メッセージを入力",
+                24.,
+                SECONDARY,
+            );
+        }
+        if caret_visible {
+            let x = origin.x + if empty { 0. } else { caret.min.x };
+            let center = if empty {
+                text_area.center().y
+            } else {
+                origin.y + caret.center().y
+            };
+            let half_height = 12. * self.scale;
+            text_painter.line_segment(
+                [
+                    Pos2::new(x, center - half_height),
+                    Pos2::new(x, center + half_height),
+                ],
+                Stroke::new(1.8 * self.scale, ACCENT),
+            );
+        }
+
+        let hit = EditorHit {
+            area: text_area,
+            origin,
+            galley,
+        };
+        if self.controller_input {
+            self.editor = Some(hit);
+        } else {
+            let response = self
+                .ui
+                .interact(
+                    text_area,
+                    self.ui.scope_id().with("message_editor"),
+                    Sense::click(),
+                )
+                .on_hover_cursor(egui::CursorIcon::Text);
+            if response.clicked()
+                && let Some(position) = response.interact_pointer_pos()
+            {
+                response.request_focus();
+                self.action = Some(hit.action(position));
+            } else if response.has_focus()
+                && enter_enabled(keyboard, destination)
+                && self.ui.input(|input| input.key_pressed(egui::Key::Enter))
+            {
+                self.action = Some(Action::Enter);
+            }
+        }
+
+        if destination == Destination::Osc {
+            let count = before.encode_utf16().count()
+                + preedit.encode_utf16().count()
+                + after.encode_utf16().count();
+            self.label(
+                self.box_at(614., 107., 79., 18.),
                 Align2::RIGHT_CENTER,
                 &format!("{count} / {CHAT_LIMIT}"),
                 12.,
@@ -248,51 +327,50 @@ impl Board<'_> {
             );
         }
         let route = match destination {
-            Destination::Osc => "送信先  VRChat Chatbox",
-            Destination::SteamVrInput => "送信先  VRアプリの入力欄",
+            Destination::Osc => "VRChat Chatbox",
+            Destination::SteamVrInput => "VRアプリの入力欄",
         };
-        let (detail, color) = if keyboard.status.is_empty() {
-            (route, SECONDARY)
+        let help = if keyboard.composer.has_preedit() {
+            "Enterで確定"
         } else {
-            (keyboard.status.as_str(), ACCENT)
+            "Enterで送信"
+        };
+        let detail = if keyboard.status.is_empty() {
+            format!("{route}  ·  {help}")
+        } else {
+            keyboard.status.clone()
         };
         self.label(
-            self.box_at(36., 106., if japanese { 480. } else { 695. }, 21.),
+            self.box_at(36., 106., 570., 21.),
             Align2::LEFT_CENTER,
-            detail,
+            &detail,
             14.,
-            color,
+            if keyboard.status.is_empty() {
+                SECONDARY
+            } else {
+                ACCENT
+            },
         );
-        if japanese {
-            let text = keyboard.composer.text();
-            let can_clear = !text.is_empty();
-            self.button(
-                self.box_at(620., 77., 91., 39.),
-                "全消去",
-                15.,
-                if can_clear { Face::Key } else { Face::Disabled },
-                Action::Clear,
-            );
-            self.button(
-                self.box_at(720., 77., 104., 39.),
-                "送信 ↗",
-                16.,
-                send_face(&text, destination),
-                Action::Send,
-            );
-        }
+        self.button(
+            self.box_at(720., 77., 104., 39.),
+            "全消去",
+            15.,
+            if empty { Face::Disabled } else { Face::Key },
+            Action::Clear,
+        );
     }
 
     fn candidates(&mut self, keyboard: &Keyboard) {
         let values = &keyboard.candidates;
         if values.is_empty() {
             let hint = match keyboard.composer.language() {
-                Language::Japanese if keyboard.japanese_direct() => {
+                Language::Japanese if keyboard.direct_input() => {
                     "半角英数字 · 半角/全角で日本語入力に切り替え"
                 }
                 Language::Japanese => "ローマ字で入力 · 半角/全角で半角英数字に切り替え",
                 Language::English => "絵文字は一覧または :cat: などの短縮名から選択",
-                Language::Korean => "2ボル式で入力",
+                Language::Korean if keyboard.direct_input() => "英数字 · 한/영でハングルに切り替え",
+                Language::Korean => "2ボル式で入力 · 한/영で英数字に切り替え",
             };
             self.label(
                 self.box_at(24., 141., 660., 36.),
@@ -334,76 +412,107 @@ impl Board<'_> {
     }
 
     fn keys(&mut self, keyboard: &Keyboard, destination: Destination) {
-        let shift = keyboard.shift;
-        let lang = keyboard.composer.language();
-        let text = keyboard.composer.text();
-        let has_text = !text.is_empty();
-        if lang == Language::Japanese {
-            self.jis_keys(keyboard, has_text);
-            return;
+        let has_text = !keyboard.composer.text().is_empty();
+        let enter = enter_face(keyboard, destination);
+        match keyboard.composer.language() {
+            Language::Japanese => self.jis_keys(keyboard, has_text, enter),
+            language => self.ansi_keys(keyboard, language, has_text, enter),
         }
-        let numbers = if shift {
-            "!@#$%^&*()_+"
-        } else {
-            "1234567890-="
-        };
-        self.row(
-            188.,
-            numbers
-                .chars()
-                .map(|key| (key.to_string(), 1., Action::Key(key), Face::Key)),
+    }
+
+    fn ansi_keys(&mut self, keyboard: &Keyboard, language: Language, has_text: bool, enter: Face) {
+        let shift = keyboard.shift;
+        let hangul = language == Language::Korean && !keyboard.direct_input();
+        let shift_face = if shift { Face::Selected } else { Face::Key };
+        self.physical_chars(
+            0,
+            0.,
+            if shift {
+                "~!@#$%^&*()_+"
+            } else {
+                "`1234567890-="
+            },
+            false,
         );
-        self.row(232., letters("qwertyuiop[]", "QWERTYUIOP{}", shift, lang));
-        let mut middle: Vec<_> = letters("asdfghjkl;'", "ASDFGHJKL:\"", shift, lang).collect();
-        middle.push((
-            "削除".to_owned(),
-            1.4,
-            Action::Backspace,
+        self.button(
+            self.jis_rect(0, 13., 2.),
+            "Backspace",
+            15.,
             if has_text { Face::Key } else { Face::Disabled },
-        ));
-        self.row(276., middle);
-        let shift_key = (
-            "Shift".to_owned(),
-            1.45,
+            Action::Backspace,
+        );
+        self.physical_chars(
+            1,
+            1.5,
+            if shift {
+                "QWERTYUIOP{}"
+            } else {
+                "qwertyuiop[]"
+            },
+            hangul,
+        );
+        let slash = if shift { '|' } else { '\\' };
+        self.button(
+            self.jis_rect(1, 13.5, 1.5),
+            &slash.to_string(),
+            20.,
+            Face::Key,
+            Action::Key(slash),
+        );
+        self.physical_chars(
+            2,
+            1.75,
+            if shift { "ASDFGHJKL:\"" } else { "asdfghjkl;'" },
+            hangul,
+        );
+        self.button(
+            self.jis_rect(2, 12.75, 2.25),
+            "Enter",
+            16.,
+            enter,
+            Action::Enter,
+        );
+        self.button(
+            self.jis_rect(3, 0., 2.25),
+            "Shift",
+            16.,
+            shift_face,
             Action::Shift,
-            if shift { Face::Selected } else { Face::Key },
         );
-        let lower = std::iter::once(shift_key.clone())
-            .chain(letters("zxcvbnm,./", "ZXCVBNM<>?", shift, lang))
-            .chain(std::iter::once(shift_key));
-        self.row(320., lower);
-        self.row(
-            364.,
-            [
-                (
-                    "全消去".into(),
-                    1.2,
-                    Action::Clear,
-                    if has_text {
-                        Face::Subtle
-                    } else {
-                        Face::Disabled
-                    },
-                ),
-                (
-                    "確定".into(),
-                    1.35,
-                    Action::Commit,
-                    if keyboard.composer.preedit().is_empty() {
-                        Face::Disabled
-                    } else {
-                        Face::Key
-                    },
-                ),
-                ("スペース".into(), 4.3, Action::Space, Face::Key),
-                (
-                    "送信 ↗".into(),
-                    2.,
-                    Action::Send,
-                    send_face(&text, destination),
-                ),
-            ],
+        self.physical_chars(
+            3,
+            2.25,
+            if shift { "ZXCVBNM<>?" } else { "zxcvbnm,./" },
+            hangul,
         );
+        self.button(
+            self.jis_rect(3, 12.25, 2.75),
+            "Shift",
+            16.,
+            shift_face,
+            Action::Shift,
+        );
+        let (start, width) = if language == Language::Korean {
+            (5., 5.)
+        } else {
+            (3.75, 6.25)
+        };
+        self.button(
+            self.jis_rect(4, start, width),
+            "Space",
+            16.,
+            Face::Key,
+            Action::Space,
+        );
+        if language == Language::Korean {
+            self.button(
+                self.jis_rect(4, 10., 1.25),
+                "한/영",
+                14.,
+                if hangul { Face::Selected } else { Face::Key },
+                Action::ToggleDirect,
+            );
+        }
     }
 
     // The 109-key JIS main block is 15 key units wide. Empty modifier
@@ -419,10 +528,19 @@ impl Board<'_> {
     }
 
     fn jis_chars(&mut self, row: usize, start: f32, chars: &str) {
+        self.physical_chars(row, start, chars, false);
+    }
+
+    fn physical_chars(&mut self, row: usize, start: f32, chars: &str, hangul: bool) {
         for (offset, key) in chars.chars().enumerate() {
             self.button(
                 self.jis_rect(row, start + offset as f32, 1.),
-                &key.to_string(),
+                &if hangul {
+                    hangul_key_label(key).unwrap_or(key)
+                } else {
+                    key
+                }
+                .to_string(),
                 20.,
                 Face::Key,
                 Action::Key(key),
@@ -430,9 +548,9 @@ impl Board<'_> {
         }
     }
 
-    fn jis_keys(&mut self, keyboard: &Keyboard, has_text: bool) {
+    fn jis_keys(&mut self, keyboard: &Keyboard, has_text: bool, enter: Face) {
         let shift = keyboard.shift;
-        let direct = keyboard.japanese_direct();
+        let direct = keyboard.direct_input();
         let composing = !keyboard.composer.preedit().is_empty();
         let shift_face = if shift { Face::Selected } else { Face::Key };
         let commit_face = if composing { Face::Key } else { Face::Disabled };
@@ -442,7 +560,7 @@ impl Board<'_> {
             "半/全",
             12.,
             if direct { Face::Selected } else { Face::Key },
-            Action::ToggleJapaneseWidth,
+            Action::ToggleDirect,
         );
         self.jis_chars(
             0,
@@ -477,7 +595,7 @@ impl Board<'_> {
             "英数",
             15.,
             if direct { Face::Selected } else { Face::Key },
-            Action::JapaneseDirect(true),
+            Action::SetDirect(true),
         );
         self.jis_chars(
             2,
@@ -488,7 +606,7 @@ impl Board<'_> {
                 "asdfghjkl;:]"
             },
         );
-        self.jis_enter(commit_face);
+        self.jis_enter(enter);
 
         self.button(
             self.jis_rect(3, 0., 2.25),
@@ -536,7 +654,7 @@ impl Board<'_> {
             "かな",
             14.,
             if direct { Face::Key } else { Face::Selected },
-            Action::JapaneseDirect(false),
+            Action::SetDirect(false),
         );
     }
 
@@ -545,9 +663,9 @@ impl Board<'_> {
         let bottom = self.jis_rect(2, 13.75, 1.25);
         top.max.y = bottom.min.y;
         let enabled = !matches!(face, Face::Disabled);
-        let (top_hover, top_press) = self.button_interaction(top, "Enter", enabled, Action::Commit);
+        let (top_hover, top_press) = self.button_interaction(top, "Enter", enabled, Action::Enter);
         let (bottom_hover, bottom_press) =
-            self.button_interaction(bottom, "Enter", enabled, Action::Commit);
+            self.button_interaction(bottom, "Enter", enabled, Action::Enter);
         let (fill, border, text) =
             face.colors(top_hover || bottom_hover, top_press || bottom_press);
         let painter = self.ui.painter();
@@ -575,27 +693,7 @@ impl Board<'_> {
         );
     }
 
-    fn row(&mut self, y: f32, keys: impl IntoIterator<Item = (String, f32, Action, Face)>) {
-        let keys: Vec<_> = keys.into_iter().collect();
-        let gap = 6.;
-        let unit =
-            (816. - gap * (keys.len() - 1) as f32) / keys.iter().map(|key| key.1).sum::<f32>();
-        let mut x = 22.;
-        for (label, weight, action, face) in keys {
-            let width = unit * weight;
-            let font_size = if label.chars().count() > 2 { 16. } else { 21. };
-            self.button(
-                self.box_at(x, y, width, 40.),
-                &label,
-                font_size,
-                face,
-                action,
-            );
-            x += width + gap;
-        }
-    }
-
-    fn emoji(&mut self, keyboard: &Keyboard) {
+    fn emoji(&mut self, keyboard: &Keyboard, destination: Destination) {
         let total_pages = search_emoji("").count().div_ceil(EMOJI_PAGE_SIZE);
         for (index, emoji) in search_emoji("")
             .skip(keyboard.emoji_page * EMOJI_PAGE_SIZE)
@@ -646,10 +744,10 @@ impl Board<'_> {
         );
         self.button(
             self.box_at(716., 364., 122., 38.),
-            "キーボード",
-            15.,
-            Face::Key,
-            Action::ToggleEmoji,
+            "Enter",
+            16.,
+            enter_face(keyboard, destination),
+            Action::Enter,
         );
     }
 
@@ -788,7 +886,15 @@ impl Face {
     }
 }
 
-fn send_face(text: &str, destination: Destination) -> Face {
+fn enter_enabled(keyboard: &Keyboard, destination: Destination) -> bool {
+    !matches!(enter_face(keyboard, destination), Face::Disabled)
+}
+
+fn enter_face(keyboard: &Keyboard, destination: Destination) -> Face {
+    if keyboard.composer.has_preedit() {
+        return Face::Key;
+    }
+    let text = keyboard.composer.committed();
     if !text.trim().is_empty()
         && (destination != Destination::Osc || text.encode_utf16().count() <= CHAT_LIMIT)
     {
@@ -798,21 +904,16 @@ fn send_face(text: &str, destination: Destination) -> Face {
     }
 }
 
-fn letters<'a>(
-    normal: &'a str,
-    shifted: &'a str,
-    shift: bool,
-    lang: Language,
-) -> impl Iterator<Item = (String, f32, Action, Face)> + 'a {
-    let keys = if shift { shifted } else { normal };
-    keys.chars().map(move |key| {
-        let label = if lang == Language::Korean {
-            hangul_key_label(key).unwrap_or(key)
-        } else {
-            key
-        };
-        (label.to_string(), 1., Action::Key(key), Face::Key)
-    })
+struct EditorHit {
+    area: Rect,
+    origin: Pos2,
+    galley: Arc<Galley>,
+}
+
+impl EditorHit {
+    fn action(&self, position: Pos2) -> Action {
+        Action::MoveCaret(self.galley.cursor_from_pos(position - self.origin).index.0)
+    }
 }
 
 fn gradient(painter: &Painter, rect: Rect, radius: f32) {

@@ -28,6 +28,7 @@ impl Language {
 pub struct Composer {
     language: Language,
     committed: String,
+    caret: usize,
     reading: String,
 }
 
@@ -59,24 +60,64 @@ impl Composer {
 
     pub fn insert(&mut self, text: &str) {
         self.commit();
-        self.committed.push_str(text);
+        self.insert_committed(text);
     }
 
     pub fn backspace(&mut self) {
         if self.reading.pop().is_none()
-            && let Some((index, _)) = self.committed.grapheme_indices(true).next_back()
+            && let Some((index, _)) = self.committed[..self.caret]
+                .grapheme_indices(true)
+                .next_back()
         {
-            self.committed.truncate(index);
+            self.committed.replace_range(index..self.caret, "");
+            self.caret = self.boundary_at_or_after(index);
         }
     }
 
     pub fn clear(&mut self) {
         self.committed.clear();
         self.reading.clear();
+        self.caret = 0;
     }
 
     pub fn committed(&self) -> &str {
         &self.committed
+    }
+
+    pub fn committed_parts(&self) -> (&str, &str) {
+        self.committed.split_at(self.caret)
+    }
+
+    pub fn has_preedit(&self) -> bool {
+        !self.reading.is_empty()
+    }
+
+    pub fn move_caret(&mut self, display_index: usize) {
+        let prefix = self.committed[..self.caret].chars().count();
+        let display_len = self.preedit().chars().count();
+        let committed_len = self.reading().chars().count();
+        let index = if display_index >= prefix + display_len {
+            display_index - display_len + committed_len
+        } else if display_index > prefix {
+            prefix + (display_index - prefix).min(committed_len)
+        } else {
+            display_index
+        };
+        self.commit();
+        let mut position = 0;
+        for (byte, grapheme) in self.committed.grapheme_indices(true) {
+            let next = position + grapheme.chars().count();
+            if index < next {
+                self.caret = if index - position < next - index {
+                    byte
+                } else {
+                    byte + grapheme.len()
+                };
+                return;
+            }
+            position = next;
+        }
+        self.caret = self.committed.len();
     }
 
     pub fn preedit(&self) -> String {
@@ -88,7 +129,8 @@ impl Composer {
     }
 
     pub fn text(&self) -> String {
-        self.committed.clone() + &self.reading()
+        let (before, after) = self.committed_parts();
+        before.to_owned() + &self.reading() + after
     }
 
     pub fn candidates(&self) -> Vec<String> {
@@ -122,7 +164,8 @@ impl Composer {
 
     pub fn select(&mut self, candidate: &str) {
         if let Some((offset, _)) = self.shortcode() {
-            self.committed.truncate(offset);
+            self.committed.replace_range(offset..self.caret, "");
+            self.caret = offset;
         }
         self.replace_preedit(candidate);
     }
@@ -131,7 +174,7 @@ impl Composer {
         if self.language != Language::English {
             return None;
         }
-        let end = self.committed.trim_end_matches(':');
+        let end = self.committed[..self.caret].trim_end_matches(':');
         let (prefix, tag) = end.rsplit_once(':')?;
         let valid_start = prefix.chars().next_back().is_none_or(char::is_whitespace);
         (valid_start && tag.len() >= 2 && tag.bytes().all(|b| b.is_ascii_lowercase()))
@@ -139,8 +182,23 @@ impl Composer {
     }
 
     pub fn replace_preedit(&mut self, candidate: &str) {
-        self.committed.push_str(candidate);
+        self.insert_committed(candidate);
         self.reading.clear();
+    }
+
+    fn insert_committed(&mut self, text: &str) {
+        self.committed.insert_str(self.caret, text);
+        self.caret = self.boundary_at_or_after(self.caret + text.len());
+    }
+
+    fn boundary_at_or_after(&self, byte: usize) -> usize {
+        if byte == self.committed.len() {
+            return byte;
+        }
+        self.committed
+            .grapheme_indices(true)
+            .find_map(|(index, _)| (index >= byte).then_some(index))
+            .unwrap_or(self.committed.len())
     }
 
     fn convert(&self, finalizing: bool) -> String {
@@ -186,6 +244,19 @@ mod tests {
         composer.insert("A👩‍💻");
         composer.backspace();
         assert_eq!(composer.text(), "A");
+    }
+
+    #[test]
+    fn editing_at_the_caret_preserves_the_suffix_and_graphemes() {
+        let mut composer = Composer::default();
+        composer.insert("A👩‍💻B");
+        composer.move_caret(4);
+        composer.backspace();
+        "kana".chars().for_each(|key| composer.key(key));
+        assert_eq!(composer.text(), "AかなB");
+        composer.commit();
+        composer.insert("!");
+        assert_eq!(composer.text(), "Aかな!B");
     }
 
     #[test]

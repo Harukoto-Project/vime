@@ -2,6 +2,7 @@ mod microsoft_ime;
 mod view;
 
 use microsoft_ime::Lookup;
+use std::time::{Duration, Instant};
 use vime::ime::{Composer, Language};
 
 pub use view::{ASPECT, SIZE, VrKeys, show, show_vr};
@@ -14,16 +15,17 @@ pub enum Action {
     Insert(String),
     Backspace,
     Commit,
+    MoveCaret(usize),
     Space,
     Shift,
-    ToggleJapaneseWidth,
-    JapaneseDirect(bool),
+    ToggleDirect,
+    SetDirect(bool),
     ConvertJapanese,
     ToggleEmoji,
     PageEmoji(i32),
     PageCandidates,
     Clear,
-    Send,
+    Enter,
     Close,
 }
 
@@ -31,6 +33,8 @@ pub struct Keyboard {
     pub composer: Composer,
     pub shift: bool,
     japanese_direct: bool,
+    korean_direct: bool,
+    caret_reset: Instant,
     pub emoji: bool,
     pub emoji_page: usize,
     pub candidate_page: usize,
@@ -46,6 +50,8 @@ impl Keyboard {
             composer: Composer::default(),
             shift: false,
             japanese_direct: false,
+            korean_direct: false,
+            caret_reset: Instant::now(),
             emoji: false,
             emoji_page: 0,
             candidate_page: 0,
@@ -59,6 +65,7 @@ impl Keyboard {
     pub fn status(&mut self, message: impl Into<String>) {
         self.status = message.into();
         self.revision = self.revision.wrapping_add(1);
+        self.caret_reset = Instant::now();
     }
 
     pub fn clear(&mut self) {
@@ -67,8 +74,21 @@ impl Keyboard {
         self.candidate_page = 0;
     }
 
-    pub fn japanese_direct(&self) -> bool {
-        self.composer.language() == Language::Japanese && self.japanese_direct
+    pub fn direct_input(&self) -> bool {
+        match self.composer.language() {
+            Language::Japanese => self.japanese_direct,
+            Language::Korean => self.korean_direct,
+            Language::English => false,
+        }
+    }
+
+    pub fn caret_blink(&self, now: Instant) -> (bool, Duration) {
+        const HALF_PERIOD: u128 = 530;
+        let elapsed = now.saturating_duration_since(self.caret_reset).as_millis();
+        (
+            (elapsed / HALF_PERIOD).is_multiple_of(2),
+            Duration::from_millis((HALF_PERIOD - elapsed % HALF_PERIOD) as u64),
+        )
     }
 
     pub fn apply(&mut self, action: Action) {
@@ -81,15 +101,16 @@ impl Keyboard {
                 | Action::Candidate(_)
                 | Action::Backspace
                 | Action::Commit
-                | Action::ToggleJapaneseWidth
-                | Action::JapaneseDirect(_)
+                | Action::MoveCaret(_)
+                | Action::ToggleDirect
+                | Action::SetDirect(_)
                 | Action::ConvertJapanese
                 | Action::Space
                 | Action::Clear
         );
         match action {
             Action::Key(key) if self.composer.text().chars().count() < 512 => {
-                if self.japanese_direct() {
+                if self.direct_input() {
                     self.composer.insert(&key.to_string());
                 } else {
                     self.composer.key(key);
@@ -108,12 +129,11 @@ impl Keyboard {
             Action::Candidate(value) => self.composer.select(&value),
             Action::Backspace => self.composer.backspace(),
             Action::Commit => self.composer.commit(),
+            Action::MoveCaret(index) => self.composer.move_caret(index),
             Action::Space => self.composer.insert(" "),
             Action::Shift => self.shift = !self.shift,
-            Action::ToggleJapaneseWidth => {
-                self.set_japanese_direct(!self.japanese_direct);
-            }
-            Action::JapaneseDirect(direct) => self.set_japanese_direct(direct),
+            Action::ToggleDirect => self.set_direct_input(!self.direct_input()),
+            Action::SetDirect(direct) => self.set_direct_input(direct),
             Action::ConvertJapanese => {
                 if let Some(candidate) = self.candidates.first() {
                     self.composer.select(candidate);
@@ -135,7 +155,7 @@ impl Keyboard {
                 self.candidate_page = (self.candidate_page + 1) % pages;
             }
             Action::Clear => self.clear(),
-            Action::Key(_) | Action::Insert(_) | Action::Send | Action::Close => {}
+            Action::Key(_) | Action::Insert(_) | Action::Enter | Action::Close => {}
         }
         let reading = self.composer.reading();
         if editing && (reading != before || self.composer.language() == Language::English) {
@@ -144,17 +164,22 @@ impl Keyboard {
         self.status("");
     }
 
-    fn set_japanese_direct(&mut self, direct: bool) {
-        if self.japanese_direct != direct {
+    fn set_direct_input(&mut self, direct: bool) {
+        let mode = match self.composer.language() {
+            Language::Japanese => &mut self.japanese_direct,
+            Language::Korean => &mut self.korean_direct,
+            Language::English => return,
+        };
+        if *mode != direct {
             self.composer.commit();
-            self.japanese_direct = direct;
+            *mode = direct;
             self.shift = false;
         }
     }
 
     fn refresh_candidates(&mut self, reading: &str) {
         self.candidates = self.composer.candidates();
-        if self.composer.language() == Language::Japanese && !self.japanese_direct() {
+        if self.composer.language() == Language::Japanese && !self.direct_input() {
             self.ime.request(reading);
         }
         self.candidate_page = 0;
@@ -165,7 +190,7 @@ impl Keyboard {
             return;
         };
         if self.composer.language() != Language::Japanese
-            || self.japanese_direct()
+            || self.direct_input()
             || self.composer.reading() != reading
         {
             return;

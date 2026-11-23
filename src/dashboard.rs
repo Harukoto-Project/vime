@@ -110,6 +110,7 @@ impl Dashboard {
         applied: &Settings,
         draft: &mut Settings,
         message: &str,
+        caret_visible: bool,
     ) -> Option<Command> {
         let mut command = None;
         let old_page = self.page;
@@ -130,8 +131,9 @@ impl Dashboard {
                 match self.page {
                     Page::Keyboard => {
                         let width = ui.available_width().min(SIZE[0] as f32 - 64.);
-                        command = keyboard::show(ui, keyboard, width, applied.destination)
-                            .map(Command::Keyboard);
+                        command =
+                            keyboard::show(ui, keyboard, width, applied.destination, caret_visible)
+                                .map(Command::Keyboard);
                     }
                     Page::Settings => {
                         command = settings(ui, applied, draft, message);
