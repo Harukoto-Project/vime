@@ -1,59 +1,61 @@
-# <img src="assets/icon.png" width="36" height="36" alt=""> ViME
+# ViME
 
-ViMEは、VR内で日本語・英語・韓国語を入力できる、Windows向けのオープンソースIMEキーボードです。コントローラーでキーを押し、入力した文章をVRChatのChatboxや対応するSteamVRアプリに送れます。
+English · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-**[Windows版のダウンロード（GitHub Releases）](https://github.com/Harukoto-Project/vime/releases)** · 日本語 · [English](README.en.md) · [한국어](README.ko.md)
+ViME is an open-source IME keyboard for SteamVR on Windows. Type in Japanese, English, or Korean with your VR controllers and send text to the VRChat Chatbox or a compatible SteamVR app.
 
-![ViMEのVRキーボード。「こんにちは、ViMEです。」と入力した状態で、上部に言語切り替え、左下に絵文字ボタンがある。](assets/vr-keyboard.png)
+**[Download for Windows (GitHub Releases)](https://github.com/Harukoto-Project/vime/releases)**
 
-## インストール
+![ViME in VR with a Japanese greeting in the text field, language tabs at the top, and a smiley button at the bottom left.](assets/vr-keyboard.png)
 
-1. [Releases](https://github.com/Harukoto-Project/vime/releases) から `ViME-<バージョン>-windows-x64.zip` をダウンロードします。
-2. ZIPを展開し、`vime.exe` を起動します。配布版はWindows x64向けで、Rustのインストールは不要です。
-3. VRで使うときはSteamVRを起動します。ViMEが先に起動していた場合は、Windows画面の **SteamVR に接続** を押してください。Windows画面のキーボードプレビューは、SteamVRに接続する前でも試せます。
+## Install
 
-配布ZIPが見つからない場合は、[ソースから起動する](#ソースから起動する)手順を使ってください。
+1. Download `ViME-<version>-windows-x64.zip` from [Releases](https://github.com/Harukoto-Project/vime/releases).
+2. Extract the ZIP and run `vime.exe`. The release build runs on Windows x64 and requires no Rust installation.
+3. Start SteamVR for VR use. If ViME is already running, select **Connect to SteamVR** in the Windows app. You can try the keyboard in the Windows preview before connecting.
 
-## VRChatに送る
+If a release ZIP is unavailable, [run ViME from source](#run-from-source).
 
-1. VRChatのAction Menuで **OSC → Enabled** をオンにします。ViMEの送信先は既定の **VRChat OSC** を使用します。VRChatの受信ポートを変更している場合は、ViMEでも同じポートを設定してください。既定は `9000` です。 [VRChatのOSC公式ガイド](https://docs.vrchat.com/docs/osc-overview)
-2. **右スティック押し込み**（Vive Wandは**右トラックパッド押し込み**）か、PCの **Ctrl+Shift+F8** でキーボードを開きます。左右どちらのコントローラーでも、キーを指してトリガーを押すと入力できます。
-3. 文章を入力し、キーボードの **Enter** でChatboxに送ります。変換中は1回目の **Enter** で文字を確定し、もう一度押すと送信します。
+## Send a message to VRChat
 
-VRで使っている間はViMEを起動したままにしてください。SteamVRダッシュボードの **ViME** タブからも、キーボード、送信設定、コントローラーの割り当てを開けます。
+1. In the VRChat Action Menu, turn on **OSC → Enabled**. Keep ViME’s destination set to **VRChat OSC**. If you changed VRChat’s receiving port, set ViME to the same port. The default is `9000`. [Official VRChat OSC guide](https://docs.vrchat.com/docs/osc-overview)
+2. Click the **right thumbstick** (**right trackpad** on Vive Wand) or press **Ctrl+Shift+F8** on your PC to open the keyboard. Point either controller at a key and press the trigger to type.
+3. Type a message and press **Enter** on the VR keyboard to send it to the Chatbox. While converting text, the first **Enter** confirms your text. Press it again to send.
 
-Windows画面の **設定** では、OSCの通知音、開閉ショートカット、VRキーボードの幅を変更できます。設定は `%LOCALAPPDATA%\ViME\settings.json` に保存されます。
+Keep ViME running during your VR session. The **ViME** tab in the SteamVR dashboard also gives you access to the keyboard, output settings, and controller bindings.
 
-## 言語の切り替えと変換
+In the Windows app’s **Settings**, you can change the OSC notification sound, toggle shortcut, and VR keyboard width. Settings are stored at `%LOCALAPPDATA%\ViME\settings.json`.
 
-- **日本語**はJIS配列でローマ字入力できます。スペースキーの **変換** で漢字やカタカナの候補が出ます。数字と英字は半角のまま、記号は全角で、`,` は `、`、`.` は `。` になります。記号とカタカナの半角表記も変換候補から選べます。**半/全** は半角の直接入力への切り替えです。
-- **English** はQWERTY、**한국어** は두벌식（2ボル式）です。韓国語の **한/영** で英数字の直接入力に切り替えられます。
-- **左下の 😃** で絵文字・顔文字・記号の一覧を開きます。英語入力では `:cat:` のような短縮名からも絵文字を選べます。
+## Switch languages and convert text
 
-![日本語の変換欄に、全角の「パーティー」と半角の「ﾊﾟｰﾃｨｰ」が並ぶ。](assets/vr-conversion.png)
+- **Japanese** uses a JIS layout with romaji input. Use the space bar to open conversion candidates for kanji and katakana. Digits and Latin letters stay half-width, while punctuation is full-width by default, including Japanese `、` and `。`. Pick half-width punctuation or katakana from the candidates. The **半/全** key switches to direct half-width input.
+- **English** uses QWERTY. **Korean** uses Dubeolsik, with **한/영** to switch to direct Latin input.
+- Open the emoji, kaomoji, and symbol palette with **😃** at the bottom left. In English mode, you can also look up emoji with shortcodes such as `:cat:`.
 
-## ほかのSteamVRアプリで使う
+![The Japanese candidate bar offers both full-width パーティー and half-width ﾊﾟｰﾃｨｰ.](assets/vr-conversion.png)
 
-ViMEの **設定** で、送信先を **SteamVR アプリ入力** に変更して保存します。対象のVRアプリで文字入力欄を開き、そのアプリをWindowsの前面にした状態で、VR側のキーボードから **Enter** を押します。対象アプリがWindowsの文字入力イベントを受け付ける必要があります。
+## Use ViME with another SteamVR app
 
-## うまく動かないとき
+In ViME’s **Settings**, choose **SteamVR app input** as the destination and save. Open a text field in the target app, bring that app to the foreground in Windows, and press **Enter** on the VR keyboard. The target app must accept Windows text input events.
 
-- **コントローラーで開かない**場合は、まず **Ctrl+Shift+F8** で開けるか確認してください。コントローラーの割り当てはViMEからSteamVRの編集画面を開いて変更できます。カスタム割り当てを使っている場合は、SteamVRでViMEの既定の割り当てに戻せます。
-- **Chatboxに届かない**場合は、VRChatのOSCが有効で、ViMEの送信先が **VRChat OSC** になっているか、受信ポートと一致しているかを確認してください。
-- **SteamVRが見つからない**場合は、SteamVRを起動してから再接続してください。別の場所にインストールしている場合は、環境変数 `STEAMVR_PATH` にインストールフォルダを指定できます。
+## Troubleshooting
 
-ViMEは試作版です。ヘッドセットやコントローラーごとの動作、VRChatでの受信は実機検証が必要です。不具合の報告には、ViMEのバージョン、機器名、再現手順を添えてください。 [GitHub Issues](https://github.com/Harukoto-Project/vime/issues)
+- **The controller shortcut does not open the keyboard.** Try **Ctrl+Shift+F8** first. Open the SteamVR binding editor from ViME to change the controller shortcut or restore the default binding.
+- **Messages do not appear in the Chatbox.** Check that OSC is enabled in VRChat, the destination is **VRChat OSC**, and the receiving port matches.
+- **ViME cannot find SteamVR.** Start SteamVR and reconnect. For a custom installation, set the `STEAMVR_PATH` environment variable to the SteamVR installation directory.
 
-## ソースから起動する
+ViME is a prototype. Headset rendering, per-controller bindings, and VRChat reception still need testing on actual hardware. Include your ViME version, hardware models, and steps to reproduce when reporting a problem. [GitHub Issues](https://github.com/Harukoto-Project/vime/issues)
 
-Windows x64、Rust 1.95以降、MSVC C++ Build Toolsが必要です。リポジトリのルートで実行します。
+## Run from source
+
+You need Windows x64, Rust 1.95 or later, and MSVC C++ Build Tools. Run this from the repository root.
 
 ```powershell
 cargo run --release --locked
 ```
 
-実行ファイルは `target/release/vime.exe` に生成されます。開発・変更の提出については [コントリビュートガイド](CONTRIBUTING.md) を参照してください。
+The executable is built at `target/release/vime.exe`. See the [contribution guide](CONTRIBUTING.md) for development and pull requests.
 
-## ライセンス
+## License
 
 [Apache License 2.0](LICENSE)

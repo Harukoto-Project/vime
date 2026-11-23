@@ -1,8 +1,10 @@
-# <img src="assets/icon.png" width="36" height="36" alt=""> ViME
+# ViME
+
+[English](README.md) · [日本語](README.ja.md) · 한국어
 
 ViME는 Windows에서 실행되는 SteamVR용 오픈 소스 IME 키보드입니다. VR 컨트롤러로 일본어, 영어, 한국어를 입력하고 VRChat Chatbox나 호환되는 SteamVR 앱으로 보낼 수 있습니다.
 
-**[Windows 버전 다운로드(GitHub Releases)](https://github.com/Harukoto-Project/vime/releases)** · [日本語](README.md) · [English](README.en.md) · 한국어
+**[Windows 버전 다운로드(GitHub Releases)](https://github.com/Harukoto-Project/vime/releases)**
 
 ![일본어 인사말을 입력한 ViME VR 키보드. 위쪽에는 언어 선택 탭, 왼쪽 아래에는 이모지 버튼이 있다.](assets/vr-keyboard.png)
 

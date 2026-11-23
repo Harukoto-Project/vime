@@ -50,8 +50,8 @@ jobs:
         run: |
           $name = "ViME-$env:VERSION-windows-x64"
           New-Item -ItemType Directory -Path "dist/$name/assets" -Force | Out-Null
-          Copy-Item target/release/vime.exe, LICENSE, README.md, README.en.md, README.ko.md, CONTRIBUTING.md "dist/$name"
-          Copy-Item assets/icon.png, assets/vr-keyboard.png, assets/vr-conversion.png "dist/$name/assets"
+          Copy-Item target/release/vime.exe, LICENSE, README.md, README.ja.md, README.ko.md, CONTRIBUTING.md "dist/$name"
+          Copy-Item assets/vr-keyboard.png, assets/vr-conversion.png "dist/$name/assets"
           Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
           $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $name.zip" | Set-Content -Encoding ascii "dist/$name.zip.sha256"
