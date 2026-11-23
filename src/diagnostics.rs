@@ -183,8 +183,10 @@ fn process_stats() -> ProcessStats {
         (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)
     }
 
-    let mut memory = PROCESS_MEMORY_COUNTERS::default();
-    memory.cb = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    let mut memory = PROCESS_MEMORY_COUNTERS {
+        cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        ..Default::default()
+    };
     let [mut created, mut exited, mut kernel, mut user] = [FILETIME::default(); 4];
     // The pseudo handle is valid for the current process and these buffers have the API's layout.
     let (has_memory, has_times) = unsafe {

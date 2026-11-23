@@ -4,6 +4,7 @@ use crate::{
     hotkeys::Hotkeys,
     keyboard::{self, Action, Keyboard, VrKeys},
     overlay_surface::OverlaySurface,
+    power,
 };
 use eframe::egui::{
     self, Align, Button, Color32, FontData, FontDefinitions, FontFamily, Frame, Layout, Margin,
@@ -31,6 +32,7 @@ const ERROR: Color32 = Color32::from_rgb(255, 177, 168);
 const HIDDEN_PAINT_RETRY: Duration = Duration::from_millis(50);
 
 pub fn run() -> eframe::Result {
+    power::disable_throttling();
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_inner_size([980., 826.])
