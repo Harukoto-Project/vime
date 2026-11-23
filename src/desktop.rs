@@ -554,8 +554,16 @@ impl App {
             if previous != self.page {
                 self.learned_typos.refresh_on_open();
             }
-            self.learned_typos
-                .show(ui, &self.directory, self.keyboard.learned_typos_revision());
+            let removed = self.learned_typos.show(
+                ui,
+                &self.directory,
+                self.keyboard.learned_typos_revision(),
+            );
+            if !removed.is_empty()
+                && let Err(error) = self.keyboard.forget_typos(removed, &self.directory)
+            {
+                self.learned_typos.delete_failed(error);
+            }
             return;
         }
         if self.page == Page::Settings {

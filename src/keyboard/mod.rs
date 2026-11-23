@@ -178,6 +178,22 @@ impl Keyboard {
         self.typo.as_ref().map_or(0, |typo| typo.saved_revision)
     }
 
+    /// Deletes learned typos. Without a running typo worker the saved list is
+    /// edited directly.
+    pub(crate) fn forget_typos(
+        &mut self,
+        pairs: Vec<LearnedTypo>,
+        directory: &Path,
+    ) -> std::io::Result<()> {
+        match &mut self.typo {
+            Some(typo) => {
+                typo.forget(pairs);
+                Ok(())
+            }
+            None => typo::forget_learned_typos(directory, &pairs),
+        }
+    }
+
     pub fn warm_local_typo(&self) {
         if let Some(typo) = &self.typo {
             typo.warm_local();

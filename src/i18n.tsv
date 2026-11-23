@@ -141,3 +141,8 @@ API キーを保護できませんでした ({0})	Could not protect the API key 
 GPU（CUDA）	GPU (CUDA)	GPU(CUDA)
 CUDA 推論を開始できません。対応する NVIDIA GPU、ドライバー、空き VRAM を確認してください	Could not start CUDA inference. Check the NVIDIA GPU, driver, and available VRAM.	CUDA 추론을 시작할 수 없습니다. 지원되는 NVIDIA GPU, 드라이버, 사용 가능한 VRAM을 확인하세요.
 推論エンジンをダウンロード（約 {0} MB）	Download inference engine (about {0} MB)	추론 엔진 다운로드(약 {0} MB)
+削除	Delete	삭제
+表示中の{0}件を削除	Delete the {0} shown	표시 중인 {0}개 삭제
+{0}件を削除する	Delete {0} entries	{0}개 삭제
+キャンセル	Cancel	취소
+学習済みの誤字を削除できませんでした ({0})	Could not delete learned typos ({0})	학습된 오타를 삭제할 수 없습니다 ({0})

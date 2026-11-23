@@ -17,6 +17,9 @@ pub(super) struct LearnedTypos {
     error: Option<io::Error>,
     search: String,
     language: Option<Language>,
+    /// The filter for which deleting every shown entry awaits confirmation.
+    confirming: Option<(String, Option<Language>)>,
+    delete_error: Option<io::Error>,
 }
 
 impl LearnedTypos {
@@ -41,12 +44,33 @@ impl LearnedTypos {
         }
     }
 
-    pub(super) fn show(&mut self, ui: &mut Ui, directory: &Path, revision: u64) {
+    pub(super) fn delete_failed(&mut self, error: io::Error) {
+        self.delete_error = Some(error);
+        self.revision = None;
+    }
+
+    /// Shows the entries and returns the ones the user deleted.
+    pub(super) fn show(
+        &mut self,
+        ui: &mut Ui,
+        directory: &Path,
+        revision: u64,
+    ) -> Vec<LearnedTypo> {
         self.update(directory, revision);
+        let mut removed = Vec::new();
         panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.heading(tr("学習済みの誤字"));
             ui.add_space(8.);
+            if let Some(error) = &self.delete_error {
+                ui.label(
+                    RichText::new(tr_args(
+                        "学習済みの誤字を削除できませんでした ({0})",
+                        &[&error.to_string()],
+                    ))
+                    .color(ERROR),
+                );
+            }
             if let Some(error) = &self.error {
                 ui.label(
                     RichText::new(tr_args(
@@ -87,6 +111,10 @@ impl LearnedTypos {
                     });
             });
             let query = self.search.trim().to_lowercase();
+            let filter = (query.clone(), self.language);
+            if self.confirming.as_ref() != Some(&filter) {
+                self.confirming = None;
+            }
             let rows: Vec<_> = self
                 .entries
                 .iter()
@@ -103,11 +131,35 @@ impl LearnedTypos {
                 ui.label(RichText::new(tr("条件に一致する誤字はありません")).color(SECONDARY));
                 return;
             }
-            ui.label(
-                RichText::new(tr_args("表示 {0} 件", &[&rows.len().to_string()]))
-                    .small()
-                    .color(SECONDARY),
-            );
+            let count = rows.len().to_string();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(tr_args("表示 {0} 件", &[&count]))
+                        .small()
+                        .color(SECONDARY),
+                );
+                if self.confirming.is_none() {
+                    if ui
+                        .small_button(tr_args("表示中の{0}件を削除", &[&count]))
+                        .clicked()
+                    {
+                        self.confirming = Some(filter.clone());
+                    }
+                } else {
+                    if ui
+                        .small_button(
+                            RichText::new(tr_args("{0}件を削除する", &[&count])).color(ERROR),
+                        )
+                        .clicked()
+                    {
+                        removed.extend(rows.iter().map(|entry| (*entry).clone()));
+                        self.confirming = None;
+                    }
+                    if ui.small_button(tr("キャンセル")).clicked() {
+                        self.confirming = None;
+                    }
+                }
+            });
             ui.add_space(3.);
             let column = (ui.available_width() - 2. * ui.spacing().item_spacing.x) / 3.;
             egui::Grid::new("learned_typo_rows")
@@ -123,11 +175,22 @@ impl LearnedTypos {
                     for entry in rows {
                         ui.add(egui::Label::new(&entry.original).wrap());
                         ui.add(egui::Label::new(&entry.replacement).wrap());
-                        ui.label(RichText::new(&entry.language).color(SECONDARY));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(&entry.language).color(SECONDARY));
+                            if ui.small_button(tr("削除")).clicked() {
+                                removed.push(entry.clone());
+                            }
+                        });
                         ui.end_row();
                     }
                 });
         });
+        if !removed.is_empty() {
+            self.delete_error = None;
+            self.confirming = None;
+            self.entries.retain(|entry| !removed.contains(entry));
+        }
+        removed
     }
 }
 

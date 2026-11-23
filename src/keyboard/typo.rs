@@ -201,6 +201,7 @@ fn edit_pair(before: &Snapshot, after: &Snapshot) -> Option<(Pair, String)> {
 
 enum Query {
     Learn(Pair, String),
+    Forget(Vec<Pair>),
     Suggest(Snapshot),
     WarmLocal,
     Calibrate {
@@ -282,6 +283,7 @@ enum Outcome {
     Skipped,
     Evaluated(Option<Suggestion>),
     Learned,
+    Forgot,
 }
 
 struct Decision {
@@ -305,6 +307,7 @@ pub struct Typo {
     edit: Edit,
     pending_edits: VecDeque<(Pair, String)>,
     pending_suggestion: Option<Snapshot>,
+    pending_forgets: Vec<Pair>,
     due: Option<Instant>,
     pub suggestion: Option<Suggestion>,
     pub error: Option<io::Error>,
@@ -360,6 +363,14 @@ impl Typo {
                         wake.request_repaint();
                         continue;
                     }
+                    if let Query::Forget(pairs) = &request.query {
+                        let result = worker.forget(pairs);
+                        if outgoing.send(request.reply(result)).is_err() {
+                            break;
+                        }
+                        wake.request_repaint();
+                        continue;
+                    }
                     let generation = request.generation;
                     let revision = request.revision;
                     let stale = || generation != current.load(Relaxed) || measuring.load(Relaxed);
@@ -410,6 +421,7 @@ impl Typo {
             edit: Edit::default(),
             pending_edits: VecDeque::new(),
             pending_suggestion: None,
+            pending_forgets: Vec::new(),
             due: None,
             suggestion: None,
             error: None,
@@ -577,7 +589,28 @@ impl Typo {
         }
     }
 
+    /// Removes learned pairs. The worker owns the list, so it deletes them; the
+    /// request is retried until its queue has room.
+    pub fn forget(&mut self, pairs: Vec<Pair>) {
+        self.pending_forgets.extend(pairs);
+        self.suggestion = None;
+        self.dispatch_forgets();
+    }
+
+    fn dispatch_forgets(&mut self) {
+        if self.pending_forgets.is_empty() {
+            return;
+        }
+        let pairs = std::mem::take(&mut self.pending_forgets);
+        if let Err(TrySendError::Full(Query::Forget(pairs))) = self.send(Query::Forget(pairs)) {
+            self.pending_forgets = pairs;
+            self.context
+                .request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
     pub fn poll(&mut self, composer: &Composer) -> bool {
+        self.dispatch_forgets();
         if let Some(due) = self.due {
             let now = Instant::now();
             if due <= now && self.calibrating.load(Relaxed) {
@@ -604,7 +637,7 @@ impl Typo {
         }
         let mut changed = false;
         while let Ok(reply) = self.replies.try_recv() {
-            if matches!(reply.result, Ok(Outcome::Learned)) {
+            if matches!(reply.result, Ok(Outcome::Learned | Outcome::Forgot)) {
                 self.saved_revision = self.saved_revision.wrapping_add(1);
             }
             if reply.generation != self.generation.load(Relaxed) {
@@ -615,7 +648,7 @@ impl Typo {
             }
             match reply.result {
                 Ok(Outcome::Skipped) => {}
-                Ok(Outcome::Learned) => self.error = None,
+                Ok(Outcome::Learned | Outcome::Forgot) => self.error = None,
                 Ok(Outcome::Evaluated(suggestion)) => {
                     self.error = None;
                     if reply.revision == self.revision.load(Relaxed) && suggestion.is_some() {
@@ -674,6 +707,20 @@ impl Worker {
             spellcheck: Spellcheck::open().ok(),
             local: LocalD1::new(directory),
         }
+    }
+
+    fn forget(&mut self, pairs: &[Pair]) -> io::Result<Outcome> {
+        let remaining: Vec<_> = self
+            .pairs
+            .iter()
+            .filter(|pair| !pairs.contains(pair))
+            .cloned()
+            .collect();
+        if remaining.len() != self.pairs.len() {
+            save_pairs(&self.path, &remaining)?;
+            self.pairs = remaining;
+        }
+        Ok(Outcome::Forgot)
     }
 
     fn run_batch(
@@ -1034,6 +1081,17 @@ pub(crate) fn load_learned_typos(directory: &Path) -> io::Result<Vec<Pair>> {
     Ok(pairs)
 }
 
+/// Removes learned pairs from the saved list while no worker owns it.
+pub(crate) fn forget_learned_typos(directory: &Path, pairs: &[Pair]) -> io::Result<()> {
+    let mut saved = load_learned_typos(directory)?;
+    let before = saved.len();
+    saved.retain(|pair| !pairs.contains(pair));
+    if saved.len() == before {
+        return Ok(());
+    }
+    save_pairs(&directory.join(LEARNED_FILE), &saved)
+}
+
 fn save_pairs(path: &Path, pairs: &[Pair]) -> io::Result<()> {
     let directory = path.parent().expect("the learning file has a parent");
     fs::create_dir_all(directory)?;
@@ -1377,5 +1435,82 @@ mod tests {
         };
         save_pairs(&path, std::slice::from_ref(&pair)).unwrap();
         assert_eq!(Worker::new(directory.path().to_owned()).pairs, vec![pair]);
+    }
+
+    #[test]
+    fn forgets_only_the_chosen_pairs_and_keeps_the_rest_after_restart() {
+        let pair = |original: &str, replacement: &str| Pair {
+            language: "English".into(),
+            original: original.into(),
+            replacement: replacement.into(),
+        };
+        let (first, second, third) = (
+            pair("vritual", "virtual"),
+            pair("teh", "the"),
+            pair("recieve", "receive"),
+        );
+        let all = vec![first.clone(), second.clone(), third.clone()];
+
+        // The worker owns the list while it runs, so a later learned pair must
+        // not bring a forgotten one back.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("typos.json");
+        save_pairs(&path, &all).unwrap();
+        let mut worker = Worker::new(directory.path().to_owned());
+        assert!(matches!(
+            worker.forget(&[second.clone(), pair("never", "learned")]),
+            Ok(Outcome::Forgot)
+        ));
+        assert_eq!(worker.pairs, vec![first.clone(), third.clone()]);
+        assert_eq!(
+            load_learned_typos(directory.path()).unwrap(),
+            vec![first.clone(), third.clone()]
+        );
+        assert!(worker.forget(&[]).is_ok());
+        assert_eq!(worker.pairs.len(), 2);
+
+        // Without a worker the saved list is edited directly.
+        let directory = tempfile::tempdir().unwrap();
+        save_pairs(&directory.path().join("typos.json"), &all).unwrap();
+        forget_learned_typos(directory.path(), &[first, third.clone()]).unwrap();
+        assert_eq!(load_learned_typos(directory.path()).unwrap(), vec![second]);
+        forget_learned_typos(directory.path(), &[third]).unwrap();
+        assert_eq!(load_learned_typos(directory.path()).unwrap().len(), 1);
+        let empty = tempfile::tempdir().unwrap();
+        forget_learned_typos(empty.path(), &[]).unwrap();
+        assert!(!empty.path().join("typos.json").exists());
+    }
+
+    #[test]
+    fn forgetting_through_the_running_worker_updates_the_saved_list() {
+        let pair = |original: &str, replacement: &str| Pair {
+            language: "English".into(),
+            original: original.into(),
+            replacement: replacement.into(),
+        };
+        let (gone, kept) = (pair("teh", "the"), pair("recieve", "receive"));
+        let directory = tempfile::tempdir().unwrap();
+        save_pairs(
+            &directory.path().join("typos.json"),
+            &[gone.clone(), kept.clone()],
+        )
+        .unwrap();
+        let mut keyboard = Keyboard::new(Context::default());
+        keyboard.configure_typo(
+            &TypoSettings {
+                provider: TypoProvider::D1,
+                url: "http://127.0.0.1:1/v1/systemone".into(),
+                ..Default::default()
+            },
+            directory.path(),
+        );
+        keyboard.forget_typos(vec![gone], directory.path()).unwrap();
+        let start = Instant::now();
+        while keyboard.learned_typos_revision() == 0 && start.elapsed() < Duration::from_secs(5) {
+            keyboard.poll_candidates();
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(keyboard.learned_typos_revision(), 1);
+        assert_eq!(load_learned_typos(directory.path()).unwrap(), vec![kept]);
     }
 }
