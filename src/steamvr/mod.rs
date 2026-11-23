@@ -18,15 +18,19 @@ static RUNTIME_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct Pointer {
-    pub hand: usize,
     pub uv: [f32; 2],
     pub down: bool,
+}
+
+pub struct KeyboardInput {
+    pub pointers: [Option<Pointer>; 2],
+    pub presses: [Option<[f32; 2]>; 2],
 }
 
 #[derive(Default)]
 pub struct Frame {
     pub toggle: bool,
-    pub pointer: Option<Pointer>,
+    pub keyboard: Option<KeyboardInput>,
     pub dashboard_active: bool,
     pub dashboard_events: Vec<DashboardEvent>,
     pub quit: bool,
@@ -35,7 +39,7 @@ pub struct Frame {
 #[derive(Clone, Copy)]
 pub enum DashboardEvent {
     Move([f32; 2]),
-    Button(bool),
+    Button { position: [f32; 2], down: bool },
     Leave,
 }
 
@@ -118,8 +122,6 @@ pub struct SteamVr {
     panel: Option<Matrix>,
     world_shown: bool,
     width: f32,
-    preferred_hand: usize,
-    holding_trigger: bool,
     armed: [bool; 2],
     quitting: bool,
 }
@@ -209,8 +211,6 @@ impl SteamVr {
             panel: None,
             world_shown: false,
             width: 1.08,
-            preferred_hand: 1,
-            holding_trigger: false,
             armed: [false; 2],
             quitting: false,
         };
@@ -308,7 +308,6 @@ impl SteamVr {
         )?;
         self.panel = Some(panel);
         self.armed = [false; 2];
-        self.holding_trigger = false;
         Ok(())
     }
 
@@ -327,7 +326,7 @@ impl SteamVr {
             self.world_shown = false;
         }
         self.panel = None;
-        self.holding_trigger = false;
+        self.armed = [false; 2];
         Ok(())
     }
 
@@ -389,7 +388,10 @@ impl SteamVr {
                 let input = match event.kind {
                     abi::MOUSE_MOVE => Some(DashboardEvent::Move(event.mouse().0)),
                     abi::MOUSE_DOWN | abi::MOUSE_UP if event.mouse().1 == abi::MOUSE_LEFT => {
-                        Some(DashboardEvent::Button(event.kind == abi::MOUSE_DOWN))
+                        Some(DashboardEvent::Button {
+                            position: event.mouse().0,
+                            down: event.kind == abi::MOUSE_DOWN,
+                        })
                     }
                     abi::FOCUS_LEAVE | abi::OVERLAY_HIDDEN => Some(DashboardEvent::Leave),
                     _ => None,
@@ -415,7 +417,6 @@ impl SteamVr {
         ) != 0
         {
             self.armed = [false; 2];
-            self.holding_trigger = false;
             return frame;
         }
 
@@ -423,35 +424,33 @@ impl SteamVr {
             && self
                 .digital(self.toggle_action, 0)
                 .is_some_and(|data| data.state && data.changed);
-        let pointer = if let Some(panel) = self.panel.filter(|_| pointing) {
-            let previous = self.preferred_hand;
-            let other = 1 - previous;
-            let first = self.pointer(previous, &panel, aspect);
-            let second = self.pointer(other, &panel, aspect);
-            let selected = if self.holding_trigger {
-                first
-            } else if second.is_some_and(|p| p.down) && !first.is_some_and(|p| p.down) {
-                second
-            } else {
-                first.or(second)
-            };
-            if let Some(pointer) = selected {
-                self.preferred_hand = pointer.hand;
-            }
-            self.holding_trigger = selected.is_some_and(|pointer| pointer.down);
-            selected
+        frame.keyboard = if let Some(panel) = self.panel.filter(|_| pointing) {
+            let (left, left_press) = self.pointer(0, &panel, aspect);
+            let (right, right_press) = self.pointer(1, &panel, aspect);
+            Some(KeyboardInput {
+                pointers: [left, right],
+                presses: [left_press, right_press],
+            })
         } else {
             self.armed = [false; 2];
-            self.holding_trigger = false;
             None
         };
         frame.toggle = toggle;
-        frame.pointer = pointer;
         frame
     }
 
-    fn pointer(&mut self, hand: usize, panel: &Matrix, aspect: f32) -> Option<Pointer> {
+    fn pointer(
+        &mut self,
+        hand: usize,
+        panel: &Matrix,
+        aspect: f32,
+    ) -> (Option<Pointer>, Option<[f32; 2]>) {
         let source = self.hands[hand];
+        let click = self.digital(self.click_action, source);
+        let down = click.as_ref().is_some_and(|data| data.state);
+        let pressed = self.armed[hand] && down;
+        self.armed[hand] = click.is_some_and(|data| !data.state);
+
         let mut pose = ActionPose::default();
         let code = self.input.aim(
             self.aim_action,
@@ -461,25 +460,11 @@ impl SteamVr {
             size_of::<ActionPose>() as u32,
             source,
         );
-        let Some(click) = self.digital(self.click_action, source) else {
-            self.armed[hand] = false;
-            return None;
-        };
         if code != 0 || !pose.active || !pose.pose.valid {
-            self.armed[hand] = false;
-            return None;
+            return (None, None);
         }
         let uv = geometry::hit(panel, &pose.pose.transform, self.width, aspect);
-        if !click.state {
-            self.armed[hand] = true;
-        } else if uv.is_none() {
-            self.armed[hand] = false;
-        }
-        uv.map(|uv| Pointer {
-            hand,
-            uv,
-            down: self.armed[hand] && click.state,
-        })
+        (uv.map(|uv| Pointer { uv, down }), uv.filter(|_| pressed))
     }
 
     fn digital(&self, action: u64, device: u64) -> Option<Digital> {

@@ -67,7 +67,15 @@ impl Dashboard {
                         self.events.push(Event::PointerMoved(position));
                     }
                 }
-                DashboardEvent::Button(down) if down != self.down => {
+                DashboardEvent::Button {
+                    position: [x, y],
+                    down,
+                } if down != self.down => {
+                    if self.mouse.is_none() && x.is_finite() && y.is_finite() {
+                        let position = Pos2::new(x, y);
+                        self.mouse = Some(position);
+                        self.events.push(Event::PointerMoved(position));
+                    }
                     if let Some(position) = self.mouse {
                         self.down = down;
                         self.events.push(pointer_button(position, down));
@@ -117,9 +125,8 @@ impl Dashboard {
                 match self.page {
                     Page::Keyboard => {
                         let width = ui.available_width().min(SIZE[0] as f32 - 64.);
-                        command =
-                            keyboard::show(ui, keyboard, width, applied.destination, None, false)
-                                .map(Command::Keyboard);
+                        command = keyboard::show(ui, keyboard, width, applied.destination)
+                            .map(Command::Keyboard);
                     }
                     Page::Settings => {
                         command = settings(ui, applied, draft, message);
@@ -167,7 +174,7 @@ fn settings(
 
         controls.heading("VR キーボード");
         controls.add_space(7.);
-        controls.label("左スティック押し込みで開閉");
+        controls.label("右スティック押し込みで開閉");
         controls.label("トリガーでキーを選択");
         controls.add_space(7.);
         if controls.button("コントローラーの割り当てを編集").clicked() {

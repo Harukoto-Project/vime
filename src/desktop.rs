@@ -2,7 +2,7 @@ use crate::{
     dashboard::{self, Command, Dashboard, Page},
     hotkeys::Hotkeys,
     keyboard::{self, Action, Keyboard},
-    overlay_surface::{OverlaySurface, pointer_events, position},
+    overlay_surface::OverlaySurface,
 };
 use eframe::egui::{
     self, Align, Button, Color32, FontData, FontDefinitions, FontFamily, Frame, Layout, Margin,
@@ -50,9 +50,9 @@ struct App {
     auto_connect: bool,
     page: Page,
     dashboard: Dashboard,
-    pointer: Option<Pointer>,
-    world_pointer: Option<Pointer>,
-    last_world: Option<(u64, Destination, Option<Pointer>)>,
+    pointers: [Option<Pointer>; 2],
+    world_presses: Vec<[f32; 2]>,
+    last_world: Option<(u64, Destination, [Option<Pointer>; 2])>,
     dashboard_revision: Option<u64>,
     draw_errors: [Option<String>; 2],
     steamvr_message: String,
@@ -124,8 +124,8 @@ impl App {
             auto_connect: true,
             page: Page::default(),
             dashboard: Dashboard::default(),
-            pointer: None,
-            world_pointer: None,
+            pointers: [None; 2],
+            world_presses: Vec::new(),
             last_world: None,
             dashboard_revision: None,
             draw_errors: [None, None],
@@ -192,14 +192,16 @@ impl App {
         if let Ok(surfaces) = &mut self.surfaces {
             surfaces.keyboard.reset();
         }
-        self.pointer = None;
+        self.pointers = [None; 2];
+        self.world_presses.clear();
         self.last_world = None;
         self.draw_errors[0] = None;
     }
 
     fn disconnect(&mut self) {
         self.vr = None;
-        self.pointer = None;
+        self.pointers = [None; 2];
+        self.world_presses.clear();
         self.last_world = None;
         self.dashboard.reset();
         self.draw_errors = [None, None];
@@ -259,32 +261,29 @@ impl App {
         let (Some(vr), Ok(surfaces)) = (&mut self.vr, &mut self.surfaces) else {
             return;
         };
-        let mut command = None;
+        let mut world_actions = Vec::new();
         if vr.visible() {
-            let pointer = self.pointer.map(|mut pointer| {
-                for (coordinate, size) in pointer.uv.iter_mut().zip(keyboard::SIZE) {
-                    *coordinate = (*coordinate * size as f32).round() / size as f32;
-                }
-                pointer
+            let pointers = self.pointers.map(|pointer| {
+                pointer.map(|mut pointer| {
+                    for (coordinate, size) in pointer.uv.iter_mut().zip(keyboard::SIZE) {
+                        *coordinate = (*coordinate * size as f32).round() / size as f32;
+                    }
+                    pointer
+                })
             });
-            let frame = (self.keyboard.revision, self.settings.destination, pointer);
-            if self.last_world != Some(frame) {
-                let events = pointer_events(self.world_pointer, pointer);
-                self.world_pointer = pointer;
+            let frame = (self.keyboard.revision, self.settings.destination, pointers);
+            if self.last_world != Some(frame) || !self.world_presses.is_empty() {
+                let presses = std::mem::take(&mut self.world_presses);
                 self.last_world = Some(frame);
-                command = surfaces
-                    .keyboard
-                    .render(events, |ui| {
-                        keyboard::show(
-                            ui,
-                            &self.keyboard,
-                            keyboard::SIZE[0] as f32,
-                            self.settings.destination,
-                            pointer.map(position),
-                            true,
-                        )
-                    })
-                    .map(Command::Keyboard);
+                world_actions = surfaces.keyboard.render(Vec::new(), |ui| {
+                    keyboard::show_vr(
+                        ui,
+                        &self.keyboard,
+                        self.settings.destination,
+                        pointers,
+                        &presses,
+                    )
+                });
             }
             if let Some(result) = surfaces
                 .keyboard
@@ -294,12 +293,13 @@ impl App {
             }
         }
 
+        let mut command = None;
         let revision = Some(self.keyboard.revision);
         if self.dashboard.redraw || (self.dashboard.active && self.dashboard_revision != revision) {
             self.dashboard.redraw = false;
             self.dashboard_revision = revision;
             let events = self.dashboard.take_events();
-            let dashboard_command = surfaces.dashboard.render(events, |ui| {
+            command = surfaces.dashboard.render(events, |ui| {
                 self.dashboard.show(
                     ui,
                     &self.keyboard,
@@ -308,7 +308,6 @@ impl App {
                     &self.settings_message,
                 )
             });
-            command = dashboard_command.or(command);
         }
         if let Some(result) = surfaces
             .dashboard
@@ -325,6 +324,17 @@ impl App {
             }
             Some(Command::SaveSettings) => self.save_draft(),
             None => {}
+        }
+        let mut sent = false;
+        for action in world_actions {
+            if matches!(action, Action::Send) && std::mem::replace(&mut sent, true) {
+                continue;
+            }
+            let close = matches!(action, Action::Close);
+            self.keyboard_action(action);
+            if close {
+                break;
+            }
         }
     }
 
@@ -364,19 +374,12 @@ impl App {
         });
         ui.add_space(5.);
         let width = ui.available_width().min(900.);
-        if let Some(action) = keyboard::show(
-            ui,
-            &self.keyboard,
-            width,
-            self.settings.destination,
-            None,
-            false,
-        ) {
+        if let Some(action) = keyboard::show(ui, &self.keyboard, width, self.settings.destination) {
             self.keyboard_action(action);
             ui.ctx().request_repaint();
         }
         ui.label(
-            RichText::new("VR では左スティック押し込みで開閉し、トリガーでキーを選びます。")
+            RichText::new("VR では右スティック押し込みで開閉し、左右のトリガーでキーを選びます。")
                 .color(SECONDARY),
         );
     }
@@ -506,7 +509,14 @@ impl eframe::App for App {
         }
         if let Some(vr) = &mut self.vr {
             let frame = vr.poll(keyboard::ASPECT);
-            self.pointer = frame.pointer;
+            if let Some(keyboard) = frame.keyboard {
+                self.pointers = keyboard.pointers;
+                self.world_presses
+                    .extend(keyboard.presses.into_iter().flatten());
+            } else {
+                self.pointers = [None; 2];
+                self.world_presses.clear();
+            }
             if frame.quit {
                 self.disconnect();
                 self.steamvr_message = "SteamVR との接続が終了しました".into();

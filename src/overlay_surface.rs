@@ -1,4 +1,3 @@
-use crate::keyboard::SIZE as KEYBOARD_SIZE;
 use eframe::{
     egui::{self, Event, FontDefinitions, Pos2, RawInput, Rect, Ui, Vec2, Visuals},
     glow::{self, HasContext},
@@ -8,7 +7,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use vime::steamvr::Pointer;
 
 const RETRY_DELAY: Duration = Duration::from_millis(250);
 
@@ -42,7 +40,11 @@ impl OverlaySurface {
         let context = egui::Context::default();
         context.set_fonts(fonts);
         context.set_visuals(visuals);
-        context.options_mut(|options| options.max_passes = std::num::NonZeroUsize::MIN);
+        context.options_mut(|options| {
+            options.max_passes = std::num::NonZeroUsize::MIN;
+            // Hand-held dashboard rays move slightly while a trigger is squeezed.
+            options.input_options.max_click_dist = 14.;
+        });
 
         Ok(Self {
             context,
@@ -194,30 +196,6 @@ fn make_target(
         }
         Ok((framebuffer, texture))
     }
-}
-
-pub fn position(pointer: Pointer) -> Pos2 {
-    Pos2::new(
-        pointer.uv[0] * KEYBOARD_SIZE[0] as f32,
-        pointer.uv[1] * KEYBOARD_SIZE[1] as f32,
-    )
-}
-
-pub fn pointer_events(previous: Option<Pointer>, current: Option<Pointer>) -> Vec<Event> {
-    let mut events = Vec::new();
-    let same_hand = matches!((previous, current), (Some(previous), Some(current)) if previous.hand == current.hand);
-    if !same_hand {
-        cancel_pointer(&mut events, previous.is_some_and(|previous| previous.down));
-    }
-    if let Some(current) = current {
-        let pos = position(current);
-        events.push(Event::PointerMoved(pos));
-        let was_down = same_hand && previous.is_some_and(|previous| previous.down);
-        if current.down != was_down {
-            events.push(pointer_button(pos, current.down));
-        }
-    }
-    events
 }
 
 pub fn pointer_button(pos: Pos2, pressed: bool) -> Event {

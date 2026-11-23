@@ -7,6 +7,7 @@ use vime::{
     ime::{Language, hangul_key_label, search_emoji},
     output::CHAT_LIMIT,
     settings::Destination,
+    steamvr::Pointer,
 };
 
 pub const SIZE: [u32; 2] = [860, 424];
@@ -24,19 +25,60 @@ pub fn show(
     keyboard: &Keyboard,
     width: f32,
     destination: Destination,
-    vr_pointer: Option<Pos2>,
-    can_close: bool,
 ) -> Option<Action> {
+    draw(ui, keyboard, width, destination, None)
+        .into_iter()
+        .next()
+}
+
+pub fn show_vr(
+    ui: &mut Ui,
+    keyboard: &Keyboard,
+    destination: Destination,
+    pointers: [Option<Pointer>; 2],
+    presses: &[[f32; 2]],
+) -> Vec<Action> {
+    draw(
+        ui,
+        keyboard,
+        SIZE[0] as f32,
+        destination,
+        Some((pointers, presses)),
+    )
+}
+
+type VrInput<'a> = ([Option<Pointer>; 2], &'a [[f32; 2]]);
+
+fn draw(
+    ui: &mut Ui,
+    keyboard: &Keyboard,
+    width: f32,
+    destination: Destination,
+    vr: Option<VrInput<'_>>,
+) -> Vec<Action> {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, width / ASPECT), Sense::hover());
     let scale = rect.width() / SIZE[0] as f32;
+    let position = |[u, v]: [f32; 2]| rect.min + Vec2::new(u * rect.width(), v * rect.height());
+    let (pointers, presses) = vr.unwrap_or(([None; 2], &[]));
     let mut view = Board {
         ui,
         rect,
         scale,
         action: None,
+        controller_input: vr.is_some(),
+        pointers: pointers
+            .map(|pointer| pointer.map(|pointer| (position(pointer.uv), pointer.down))),
+        presses: presses
+            .iter()
+            .copied()
+            .map(|uv| Press {
+                position: position(uv),
+                target: None,
+            })
+            .collect(),
     };
     view.background();
-    view.header(keyboard, can_close);
+    view.header(keyboard, vr.is_some());
     view.editor(keyboard, destination);
     view.candidates(keyboard);
     if keyboard.emoji {
@@ -44,12 +86,30 @@ pub fn show(
     } else {
         view.keys(keyboard, destination);
     }
-    if let Some(pointer) = vr_pointer {
-        let painter = view.ui.painter();
-        painter.circle_filled(pointer, 6.0, DARK_INK);
-        painter.circle_filled(pointer, 3.5, ACCENT);
+    for (pointer, color) in view
+        .pointers
+        .into_iter()
+        .zip([Color32::from_rgb(215, 194, 255), ACCENT])
+    {
+        if let Some((position, down)) = pointer {
+            let painter = view.ui.painter();
+            painter.circle_filled(position, 7.0, DARK_INK);
+            painter.circle_filled(position, if down { 5.0 } else { 3.5 }, color);
+        }
     }
     view.action
+        .into_iter()
+        .chain(
+            view.presses
+                .into_iter()
+                .filter_map(|press| press.target.map(|(_, action)| action)),
+        )
+        .collect()
+}
+
+struct Press {
+    position: Pos2,
+    target: Option<(f32, Action)>,
 }
 
 struct Board<'a> {
@@ -57,6 +117,9 @@ struct Board<'a> {
     rect: Rect,
     scale: f32,
     action: Option<Action>,
+    controller_input: bool,
+    pointers: [Option<(Pos2, bool)>; 2],
+    presses: Vec<Press>,
 }
 
 #[derive(Clone, Copy)]
@@ -424,29 +487,63 @@ impl Board<'_> {
     }
 
     fn button(&mut self, rect: Rect, label: &str, size: f32, face: Face, action: Action) {
-        let id = self.ui.scope_id().with((
-            (rect.left() - self.rect.left()) as i32,
-            (rect.top() - self.rect.top()) as i32,
-            label,
-        ));
         let enabled = !matches!(face, Face::Disabled);
-        let response = self.ui.interact(
-            rect,
-            id,
+        let (hovered, pressed) = if self.controller_input {
+            // Prefer the key under the ray, with a small margin for controller jitter.
+            let hit = rect.expand(2. * self.scale);
             if enabled {
-                Sense::click()
-            } else {
-                Sense::hover()
-            },
-        );
-        let response = if enabled {
-            response.on_hover_cursor(egui::CursorIcon::PointingHand)
+                for press in self
+                    .presses
+                    .iter_mut()
+                    .filter(|press| hit.contains(press.position))
+                {
+                    let distance = rect.distance_sq_to_pos(press.position);
+                    if press
+                        .target
+                        .as_ref()
+                        .is_none_or(|(best, _)| distance < *best)
+                    {
+                        press.target = Some((distance, action.clone()));
+                    }
+                }
+            }
+            let hovered = self
+                .pointers
+                .iter()
+                .flatten()
+                .any(|&(pos, _)| rect.contains(pos));
+            let pressed = self
+                .pointers
+                .iter()
+                .flatten()
+                .any(|&(pos, down)| down && rect.contains(pos));
+            (enabled && hovered, enabled && pressed)
         } else {
-            response
+            let id = self.ui.scope_id().with((
+                (rect.left() - self.rect.left()) as i32,
+                (rect.top() - self.rect.top()) as i32,
+                label,
+            ));
+            let response = self.ui.interact(
+                rect,
+                id,
+                if enabled {
+                    Sense::click()
+                } else {
+                    Sense::hover()
+                },
+            );
+            let response = if enabled {
+                response.on_hover_cursor(egui::CursorIcon::PointingHand)
+            } else {
+                response
+            };
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+            if response.clicked() {
+                self.action = Some(action);
+            }
+            (response.hovered(), response.is_pointer_button_down_on())
         };
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
-        let pressed = response.is_pointer_button_down_on();
-        let hovered = response.hovered();
         let (fill, border, text) = match face {
             Face::Disabled => (
                 Color32::from_white_alpha(8),
@@ -512,9 +609,6 @@ impl Board<'_> {
             size,
             text,
         );
-        if response.clicked() {
-            self.action = Some(action);
-        }
     }
 
     fn label(&self, rect: Rect, align: Align2, text: &str, size: f32, color: Color32) {

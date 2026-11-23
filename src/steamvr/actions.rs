@@ -45,13 +45,21 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
         ("oculus_touch", "joystick", "joystick"),
         ("vive_controller", "trackpad", "button"),
     ] {
-        let name = format!("binding_{controller}_v2.json");
+        let name = format!("binding_{controller}_v3.json");
         let inputs = |side: &str, control: &str, mode: &str, action: &str| {
             json!({
                 "path": format!("/user/hand/{side}/input/{control}"),
                 "mode": mode,
                 "inputs": { "click": { "output": action } }
             })
+        };
+        let trigger = |hand: &str| {
+            let mut binding = inputs(hand, "trigger", "button", CLICK.to_str().unwrap());
+            binding["parameters"] = json!({
+                "click_activate_threshold": "0.45",
+                "click_deactivate_threshold": "0.30",
+            });
+            binding
         };
         let poses: Vec<_> = ["left", "right"]
             .into_iter()
@@ -71,14 +79,11 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
                 "description": "Toggle ViME and select keyboard keys",
                 "bindings": {
                     (TOGGLE_SET.to_str().unwrap()): {
-                        "sources": [inputs("left", control, mode, TOGGLE.to_str().unwrap())]
+                        "sources": [inputs("right", control, mode, TOGGLE.to_str().unwrap())]
                     },
                     (POINTER_SET.to_str().unwrap()): {
                         "poses": poses,
-                        "sources": [
-                            inputs("left", "trigger", "button", CLICK.to_str().unwrap()),
-                            inputs("right", "trigger", "button", CLICK.to_str().unwrap())
-                        ]
+                        "sources": [trigger("left"), trigger("right")]
                     }
                 }
             }),

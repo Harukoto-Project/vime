@@ -4,7 +4,7 @@ mod view;
 use microsoft_ime::MicrosoftIme;
 use vime::ime::{Composer, Language};
 
-pub use view::{ASPECT, SIZE, show};
+pub use view::{ASPECT, SIZE, show, show_vr};
 
 #[derive(Clone, Debug)]
 pub enum Action {
