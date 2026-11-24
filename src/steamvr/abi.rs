@@ -14,6 +14,7 @@ pub const INPUT: &CStr = c"FnTable:IVRInput_010";
 pub const STANDING: i32 = 1;
 pub const APPLICATION_OVERLAY: i32 = 2;
 pub const HMD: u32 = 0;
+pub const SECONDS_FROM_VSYNC_TO_PHOTONS: i32 = 2001;
 pub const DISPLAY_FREQUENCY: i32 = 2002;
 pub const QUIT: u32 = 700;
 pub const MOUSE_MOVE: u32 = 300;
@@ -122,6 +123,7 @@ macro_rules! table {
 }
 
 table!(System {
+    time_since_last_vsync: 5(elapsed: *mut f32, frame: *mut u64) -> bool;
     tracking_pose: 11(origin: i32, prediction: f32, output: *mut Pose, count: u32) -> ();
     float_property: 22(device: u32, property: i32, error: *mut i32) -> f32;
     poll_event: 29(output: *mut Event, size: u32) -> bool;

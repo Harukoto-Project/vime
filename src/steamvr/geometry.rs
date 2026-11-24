@@ -3,31 +3,63 @@ use std::time::Instant;
 
 const DISTANCE: f32 = 1.05;
 const DROP: f32 = 0.12;
+const MIN_CUTOFF_HZ: f32 = 6.0;
+const DERIVATIVE_CUTOFF_HZ: f32 = 10.0;
+const SPEED_COEFFICIENT: f32 = 16.0;
 
 #[derive(Default)]
-pub struct PointerFilter(Option<([f32; 2], Instant)>);
+pub struct PointerFilter(Option<PointerSample>);
+
+struct PointerSample {
+    raw: [f32; 2],
+    filtered: [f32; 2],
+    velocity: [f32; 2],
+    time: Instant,
+}
 
 impl PointerFilter {
     pub fn update(&mut self, uv: [f32; 2], now: Instant, aspect: f32) -> [f32; 2] {
-        let filtered = if let Some((previous, time)) = self.0 {
-            let elapsed = now.duration_since(time).as_secs_f32();
-            let dx = uv[0] - previous[0];
-            let dy = uv[1] - previous[1];
-            // Small movements are damped. Larger movements follow the controller faster.
-            let travel = dx.hypot(dy / aspect);
-            let response = 0.024 - 0.018 * (travel / 0.04).min(1.);
-            let blend = 1. - (-elapsed / response).exp();
-            [previous[0] + dx * blend, previous[1] + dy * blend]
-        } else {
-            uv
+        let Some(previous) = &self.0 else {
+            self.0 = Some(PointerSample {
+                raw: uv,
+                filtered: uv,
+                velocity: [0.0; 2],
+                time: now,
+            });
+            return uv;
         };
-        self.0 = Some((filtered, now));
+        let elapsed = now.duration_since(previous.time).as_secs_f32();
+        if elapsed == 0.0 {
+            return previous.filtered;
+        }
+
+        // One Euro filter with a shared cutoff based on speed in panel widths per second.
+        let derivative_blend = smoothing_factor(DERIVATIVE_CUTOFF_HZ, elapsed);
+        let velocity: [f32; 2] = std::array::from_fn(|i| {
+            let derivative = (uv[i] - previous.raw[i]) / elapsed;
+            previous.velocity[i] + derivative_blend * (derivative - previous.velocity[i])
+        });
+        let speed = velocity[0].hypot(velocity[1] / aspect);
+        let blend = smoothing_factor(MIN_CUTOFF_HZ + SPEED_COEFFICIENT * speed, elapsed);
+        let filtered =
+            std::array::from_fn(|i| previous.filtered[i] + blend * (uv[i] - previous.filtered[i]));
+        self.0 = Some(PointerSample {
+            raw: uv,
+            filtered,
+            velocity,
+            time: now,
+        });
         filtered
     }
 
     pub fn reset(&mut self) {
         self.0 = None;
     }
+}
+
+fn smoothing_factor(cutoff_hz: f32, elapsed: f32) -> f32 {
+    let rate = std::f32::consts::TAU * cutoff_hz * elapsed;
+    rate / (1.0 + rate)
 }
 
 pub fn anchor(head: &Matrix) -> Matrix {
@@ -79,6 +111,29 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn pointer_filter_damps_jitter_and_tracks_fast_motion() {
+        let start = Instant::now();
+        let next = start + Duration::from_millis(11);
+        let center = [0.5, 0.5];
+        let mut slow = PointerFilter::default();
+        let mut fast = PointerFilter::default();
+        assert_eq!(slow.update(center, start, 2.0), center);
+        assert_eq!(fast.update(center, start, 2.0), center);
+
+        let jitter = 0.501;
+        let movement = 0.7;
+        let damped = slow.update([jitter, 0.5], next, 2.0)[0];
+        let tracked = fast.update([movement, 0.5], next, 2.0)[0];
+        assert!(damped > 0.5 && damped < 0.5 + (jitter - 0.5) * 0.5);
+        assert!(tracked > 0.5 + (movement - 0.5) * 0.8 && tracked <= movement);
+        assert_eq!(fast.update(center, next, 2.0)[0], tracked);
+
+        fast.reset();
+        assert_eq!(fast.update(center, next, 2.0), center);
+    }
 
     #[test]
     fn intersects_the_keyboard_front_and_flips_vertical_coordinates() {

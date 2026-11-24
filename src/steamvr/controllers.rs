@@ -70,12 +70,12 @@ impl VrWorker {
         let thread = thread::Builder::new()
             .name("vime-vr".into())
             .spawn(move || {
-                let mut frame_interval = DEFAULT_FRAME_INTERVAL;
-                let mut check_frequency = Instant::now();
+                let mut display = DisplayTiming::read(&system);
+                let mut refresh_timing = Instant::now() + Duration::from_secs(1);
                 while !worker_stop.load(Ordering::Relaxed) {
                     let (notify, quit, active) = {
                         let mut state = worker_state.lock().unwrap();
-                        let changed = state.poll(&system, dashboard);
+                        let changed = state.poll(&system, dashboard, &display);
                         // A single wake covers all input queued before the UI drains it.
                         let notify = changed && !std::mem::replace(&mut state.pending, true);
                         let active = state.frame.dashboard_active
@@ -90,10 +90,11 @@ impl VrWorker {
                     }
                     if active {
                         let start = Instant::now();
-                        if start >= check_frequency {
-                            frame_interval = display_interval(&system);
-                            check_frequency = start + Duration::from_secs(1);
+                        if start >= refresh_timing {
+                            display = DisplayTiming::read(&system);
+                            refresh_timing = start + Duration::from_secs(1);
                         }
+                        let frame_interval = display.frame_interval;
                         let timeout_ms = frame_interval.as_micros().div_ceil(1_000) as u32;
                         if sync.wait_frame_sync(timeout_ms) != 0 {
                             // A stopped compositor can report an error immediately.
@@ -133,13 +134,44 @@ impl Drop for VrWorker {
     }
 }
 
-fn display_interval(system: &System) -> Duration {
-    let mut error = 0;
-    let hz = system.float_property(abi::HMD, abi::DISPLAY_FREQUENCY, &mut error);
-    if error == 0 && (30.0..=1_000.0).contains(&hz) {
-        Duration::from_secs_f64(1.0 / f64::from(hz))
-    } else {
-        DEFAULT_FRAME_INTERVAL
+struct DisplayTiming {
+    frame_interval: Duration,
+    vsync_to_photons: f32,
+}
+
+impl DisplayTiming {
+    fn read(system: &System) -> Self {
+        let mut error = 0;
+        let hz = system.float_property(abi::HMD, abi::DISPLAY_FREQUENCY, &mut error);
+        let frame_interval = if error == 0 && (30.0..=1_000.0).contains(&hz) {
+            Duration::from_secs_f64(1.0 / f64::from(hz))
+        } else {
+            DEFAULT_FRAME_INTERVAL
+        };
+        error = 0;
+        let delay = system.float_property(abi::HMD, abi::SECONDS_FROM_VSYNC_TO_PHOTONS, &mut error);
+        let vsync_to_photons = if error == 0 && delay.is_finite() && delay >= 0.0 {
+            delay
+        } else {
+            0.0
+        };
+        Self {
+            frame_interval,
+            vsync_to_photons,
+        }
+    }
+
+    fn prediction(&self, system: &System) -> f32 {
+        let mut elapsed = 0.0;
+        let remaining = if system.time_since_last_vsync(&mut elapsed, std::ptr::null_mut())
+            && elapsed.is_finite()
+            && elapsed >= 0.0
+        {
+            (self.frame_interval.as_secs_f32() - elapsed).max(0.0)
+        } else {
+            0.0
+        };
+        remaining + self.vsync_to_photons
     }
 }
 
@@ -201,7 +233,7 @@ impl ControllerState {
         }
     }
 
-    fn poll(&mut self, system: &System, dashboard: u64) -> bool {
+    fn poll(&mut self, system: &System, dashboard: u64, display: &DisplayTiming) -> bool {
         let mut event = Event::default();
         for _ in 0..64 {
             if !system.poll_event(&mut event, size_of::<Event>() as u32) {
@@ -251,7 +283,7 @@ impl ControllerState {
             }
             changed = true;
         }
-        self.poll_controllers() || changed
+        self.poll_controllers(system, display) || changed
     }
 
     fn queue_dashboard_event(&mut self, event: DashboardEvent) {
@@ -272,7 +304,7 @@ impl ControllerState {
         events.push(event);
     }
 
-    fn poll_controllers(&mut self) -> bool {
+    fn poll_controllers(&mut self, system: &System, display: &DisplayTiming) -> bool {
         let panel = self.panel.filter(|_| !self.frame.dashboard_visible);
         let before_down = self.frame.keyboard_down;
         let mut sets = [ActionSet::default(), ActionSet::default()];
@@ -301,6 +333,7 @@ impl ControllerState {
             self.frame.keyboard_presses.clear();
             return toggle || before_down != self.frame.keyboard_down;
         };
+        let prediction = display.prediction(system);
         let now = Instant::now();
         let mut presses = [None; 2];
         for (hand, press) in presses.iter_mut().enumerate() {
@@ -310,7 +343,7 @@ impl ControllerState {
             let pressed = self.armed[hand] && down;
             self.armed[hand] = click.is_some_and(|data| !data.state);
             self.frame.keyboard_down[hand] = down;
-            if let Some(uv) = self.pointer_position(hand, source, &panel, now) {
+            if let Some(uv) = self.pointer_position(hand, &panel, prediction, now) {
                 self.cursors[hand].update(&self.overlay, &panel, uv, down, self.width, self.size);
                 *press = pressed.then_some(uv);
             } else {
@@ -327,18 +360,18 @@ impl ControllerState {
     fn pointer_position(
         &mut self,
         hand: usize,
-        source: u64,
         panel: &Matrix,
+        prediction: f32,
         now: Instant,
     ) -> Option<[f32; 2]> {
         let mut pose = ActionPose::default();
         let code = self.input.aim(
             self.actions.aim,
             abi::STANDING,
-            0.0,
+            prediction,
             &mut pose,
             size_of::<ActionPose>() as u32,
-            source,
+            self.actions.hands[hand],
         );
         let aspect = self.size[0] / self.size[1];
         if code == 0
