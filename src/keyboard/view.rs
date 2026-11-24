@@ -1,4 +1,4 @@
-use super::{Action, Keyboard};
+use super::{Action, Keyboard, icons::Icon};
 use eframe::egui::text::{CCursor, Galley};
 use eframe::egui::{
     self, Align, Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Sense, Shape, Stroke,
@@ -224,13 +224,13 @@ impl Board<'_> {
             Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
             Color32::WHITE,
         );
-        let track = self.box_at(248., 15., 348., 40.);
+        let track = self.box_at(256., 15., 348., 40.);
         self.ui
             .painter()
             .rect_filled(track, 10. * self.scale, Color32::from_black_alpha(59));
         for (index, language) in Language::ALL.into_iter().enumerate() {
             self.button(
-                self.box_at(251. + index as f32 * 114., 18., 114., 34.),
+                self.box_at(259. + index as f32 * 114., 18., 114., 34.),
                 language.label(),
                 17.,
                 if language == keyboard.composer.language() {
@@ -253,7 +253,9 @@ impl Board<'_> {
     }
 
     fn editor(&mut self, keyboard: &Keyboard, destination: Destination, caret_visible: bool) {
-        let rect = self.box_at(22., 63., 816., 69.);
+        const TOP: f32 = 74.;
+        const HEIGHT: f32 = 47.;
+        let rect = self.box_at(22., TOP, 616., HEIGHT);
         let painter = self.ui.painter();
         painter.rect(
             rect,
@@ -284,7 +286,9 @@ impl Board<'_> {
             job.append(&text, 0., format);
         }
         job.append(after, 0., TextFormat::simple(font.clone(), INK));
-        let text_area = self.box_at(36., 70., 657., 38.);
+        let show_count = destination == Destination::Osc;
+        let text_width = if show_count { 490. } else { 557. };
+        let text_area = self.box_at(36., TOP + 4., text_width, HEIGHT - 8.);
         let text_painter = painter.with_clip_rect(text_area);
         let galley = painter.layout_job(job);
         let empty = before.is_empty() && preedit.is_empty() && after.is_empty();
@@ -294,7 +298,7 @@ impl Board<'_> {
         let scroll = (caret.min.x + 5. * self.scale - text_area.width()).max(0.);
         let origin = Pos2::new(
             text_area.left() + self.scale - scroll,
-            text_area.center().y - galley.size().y * 0.5,
+            text_area.center().y - caret.center().y,
         );
         text_painter.galley(origin, galley.clone(), INK);
         if empty {
@@ -352,12 +356,10 @@ impl Board<'_> {
             }
         }
 
-        if destination == Destination::Osc {
-            let count = before.encode_utf16().count()
-                + preedit.encode_utf16().count()
-                + after.encode_utf16().count();
+        if show_count {
+            let count = keyboard.composer.text().encode_utf16().count();
             self.label(
-                self.box_at(614., 107., 79., 18.),
+                self.box_at(538., TOP, 56., HEIGHT),
                 Align2::RIGHT_CENTER,
                 &format!("{count} / {CHAT_LIMIT}"),
                 12.,
@@ -368,41 +370,53 @@ impl Board<'_> {
                 },
             );
         }
-        let route = match destination {
-            Destination::Osc => "VRChat Chatbox",
-            Destination::SteamVrInput => tr("VRアプリの入力欄"),
-        };
-        let help = if keyboard.composer.converting() {
-            tr("Spaceで次の候補 · Enterで確定")
-        } else if keyboard.can_convert() {
-            tr("Spaceで変換 · Enterで確定")
-        } else if keyboard.composer.has_preedit() {
-            tr("Enterで確定")
-        } else {
-            tr("Enterで送信")
-        };
-        let detail = if keyboard.status.is_empty() {
-            format!("{route}  ·  {help}")
-        } else {
-            keyboard.status.clone()
-        };
-        self.label(
-            self.box_at(36., 106., 570., 21.),
-            Align2::LEFT_CENTER,
-            &detail,
-            14.,
-            if keyboard.status.is_empty() {
-                SECONDARY
-            } else {
-                ACCENT
-            },
+        if !keyboard.status.is_empty() {
+            self.label(
+                self.box_at(36., TOP + HEIGHT + 1., 588., 19.),
+                Align2::LEFT_CENTER,
+                &keyboard.status,
+                14.,
+                ACCENT,
+            );
+        }
+        let divider = self.box_at(718., TOP + 5., 0., HEIGHT - 10.);
+        painter.line_segment(
+            [divider.min, divider.max],
+            Stroke::new(self.scale, Color32::from_white_alpha(37)),
         );
-        self.button(
-            self.box_at(720., 77., 104., 39.),
-            tr("全消去"),
-            15.,
+        let clear = self.box_at(601., TOP + 7.5, 28., 32.);
+        let (hovered, pressed) =
+            self.button_interaction(clear, tr("全消去"), !empty, Action::Clear);
+        let face = if empty { Face::Disabled } else { Face::Subtle };
+        let (_, _, color) = face.colors(hovered, pressed);
+        self.label(
+            clear,
+            Align2::CENTER_CENTER,
+            "×",
+            if pressed { 17. } else { 20. },
+            color,
+        );
+        self.icon_button(
+            self.box_at(650., TOP, 58., HEIGHT),
+            Icon::Send,
+            if send_enabled(keyboard, destination) {
+                Face::Primary
+            } else {
+                Face::Disabled
+            },
+            Action::Send,
+        );
+        self.icon_button(
+            self.box_at(729., TOP, 51., HEIGHT),
+            Icon::Copy,
             if empty { Face::Disabled } else { Face::Key },
-            Action::Clear,
+            Action::Copy,
+        );
+        self.icon_button(
+            self.box_at(787., TOP, 51., HEIGHT),
+            Icon::Paste,
+            Face::Key,
+            Action::Paste,
         );
     }
 
@@ -465,14 +479,25 @@ impl Board<'_> {
         }
         let page_size = keyboard.page_size();
         let first = keyboard.candidate_page * page_size;
-        for (index, value) in values.iter().enumerate().skip(first).take(page_size) {
-            let measured = self
-                .ui
-                .painter()
-                .layout_no_wrap(value.clone(), FontId::proportional(17. * self.scale), INK)
-                .size()
-                .x;
-            let width = (measured / self.scale + 28.).clamp(50., 103.);
+        let page = values.iter().skip(first).take(page_size);
+        let widths: Vec<_> = page
+            .clone()
+            .map(|value| {
+                let measured = self
+                    .ui
+                    .painter()
+                    .layout_no_wrap(value.clone(), FontId::proportional(17. * self.scale), INK)
+                    .size()
+                    .x;
+                (measured / self.scale + 28.).max(50.)
+            })
+            .collect();
+        let right = if values.len() > page_size { 792. } else { 838. };
+        let budget = right - x - 7. * widths.len().saturating_sub(1) as f32;
+        let cap = candidate_width_cap(&widths, budget);
+        for (offset, (value, width)) in page.zip(widths).enumerate() {
+            let width = width.min(cap);
+            let index = first + offset;
             self.button(
                 self.box_at(x, 141., width, 36.),
                 value,
@@ -527,10 +552,9 @@ impl Board<'_> {
             },
             |key| key,
         );
-        self.button(
+        self.icon_button(
             self.jis_rect(0, 13., 2.),
-            "Backspace",
-            15.,
+            Icon::Backspace,
             if has_text { Face::Key } else { Face::Disabled },
             Action::Backspace,
         );
@@ -558,10 +582,9 @@ impl Board<'_> {
             if shift { "ASDFGHJKL:\"" } else { "asdfghjkl;'" },
             label_hangul,
         );
-        self.button(
+        self.icon_button(
             self.jis_rect(2, 12.75, 2.25),
-            "Enter",
-            16.,
+            Icon::Enter,
             enter,
             Action::Enter,
         );
@@ -613,7 +636,7 @@ impl Board<'_> {
     fn jis_rect(&self, row: usize, column: f32, units: f32) -> Rect {
         const PITCH: f32 = 44.;
         self.box_at(
-            100. + column * PITCH,
+            (SIZE[0] as f32 - (15. * PITCH - 4.)) / 2. + column * PITCH,
             188. + row as f32 * PITCH,
             units * PITCH - 4.,
             PITCH - 4.,
@@ -661,10 +684,9 @@ impl Board<'_> {
             },
             label,
         );
-        self.button(
+        self.icon_button(
             self.jis_rect(0, 14., 1.),
-            "BS",
-            14.,
+            Icon::Backspace,
             if has_text { Face::Key } else { Face::Disabled },
             Action::Backspace,
         );
@@ -737,9 +759,10 @@ impl Board<'_> {
         let bottom = self.jis_rect(2, 13.75, 1.25);
         top.max.y = bottom.min.y;
         let enabled = !matches!(face, Face::Disabled);
-        let (top_hover, top_press) = self.button_interaction(top, "Enter", enabled, Action::Enter);
+        let label = Icon::Enter.label();
+        let (top_hover, top_press) = self.button_interaction(top, label, enabled, Action::Enter);
         let (bottom_hover, bottom_press) =
-            self.button_interaction(bottom, "Enter", enabled, Action::Enter);
+            self.button_interaction(bottom, label, enabled, Action::Enter);
         let (fill, border, text) =
             face.colors(top_hover || bottom_hover, top_press || bottom_press);
         // One L-shaped outline with every corner rounded like the other keys.
@@ -769,11 +792,10 @@ impl Board<'_> {
         let painter = self.ui.painter();
         painter.add(Shape::mesh(mesh));
         painter.add(Shape::closed_line(outline, Stroke::new(1., border)));
-        self.label(
-            bottom.shrink(3. * self.scale),
-            Align2::CENTER_CENTER,
-            "Enter",
-            14.,
+        Icon::Enter.paint(
+            self.ui,
+            Pos2::new(bottom.center().x, (top.top() + bottom.bottom()) / 2.),
+            24. * self.scale,
             text,
         );
     }
@@ -810,37 +832,36 @@ impl Board<'_> {
             );
         }
         self.label(
-            self.box_at(94., 364., 220., 38.),
+            self.box_at(94., 364., 220., 40.),
             Align2::LEFT_CENTER,
             tr("絵文字・記号"),
             15.,
             SECONDARY,
         );
         self.button(
-            self.box_at(331., 364., 49., 38.),
+            self.box_at(331., 364., 49., 40.),
             "‹",
             24.,
             Face::Key,
             Action::PageEmoji(-1),
         );
         self.label(
-            self.box_at(387., 364., 86., 38.),
+            self.box_at(387., 364., 86., 40.),
             Align2::CENTER_CENTER,
             &format!("{} / {total_pages}", keyboard.emoji_page + 1),
             16.,
             INK,
         );
         self.button(
-            self.box_at(480., 364., 49., 38.),
+            self.box_at(480., 364., 49., 40.),
             "›",
             24.,
             Face::Key,
             Action::PageEmoji(1),
         );
-        self.button(
-            self.box_at(716., 364., 122., 38.),
-            "Enter",
-            16.,
+        self.icon_button(
+            self.box_at(716., 364., 122., 40.),
+            Icon::Enter,
             enter_face(keyboard, destination),
             Action::Enter,
         );
@@ -880,6 +901,17 @@ impl Board<'_> {
                 response
             };
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+            if matches!(
+                action,
+                Action::Send
+                    | Action::Copy
+                    | Action::Paste
+                    | Action::Clear
+                    | Action::Candidate(_)
+                    | Action::CorrectTypo(_)
+            ) {
+                response.clone().on_hover_text(label);
+            }
             if self.start_hold
                 && self.held.is_none()
                 && enabled
@@ -896,11 +928,33 @@ impl Board<'_> {
             if response.clicked() {
                 self.action = Some(action);
             }
-            (response.hovered(), pressed)
+            (response.hovered() || response.has_focus(), pressed)
         }
     }
 
     fn button(&mut self, rect: Rect, label: &str, size: f32, face: Face, action: Action) {
+        let (painted, text) = self.button_face(rect, label, face, action);
+        self.label(
+            painted.shrink(4. * self.scale),
+            Align2::CENTER_CENTER,
+            label,
+            size,
+            text,
+        );
+    }
+
+    fn icon_button(&mut self, rect: Rect, icon: Icon, face: Face, action: Action) {
+        let (painted, text) = self.button_face(rect, icon.label(), face, action);
+        icon.paint(self.ui, painted.center(), 24. * self.scale, text);
+    }
+
+    fn button_face(
+        &mut self,
+        rect: Rect,
+        label: &str,
+        face: Face,
+        action: Action,
+    ) -> (Rect, Color32) {
         let (hovered, pressed) =
             self.button_interaction(rect, label, !matches!(face, Face::Disabled), action);
         let (fill, border, text) = face.colors(hovered, pressed);
@@ -916,13 +970,7 @@ impl Board<'_> {
             Stroke::new(1., border),
             StrokeKind::Inside,
         );
-        self.label(
-            painted.shrink(4. * self.scale),
-            Align2::CENTER_CENTER,
-            label,
-            size,
-            text,
-        );
+        (painted, text)
     }
 
     fn label(&self, rect: Rect, align: Align2, text: &str, size: f32, color: Color32) {
@@ -934,13 +982,16 @@ impl Board<'_> {
             },
             rect.center().y,
         );
-        self.ui.painter().with_clip_rect(rect).text(
-            point,
-            align,
-            text,
+        let mut job = LayoutJob::simple_singleline(
+            text.to_owned(),
             FontId::proportional(size * self.scale),
             color,
         );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width());
+        let painter = self.ui.painter().with_clip_rect(rect);
+        let galley = painter.layout_job(job);
+        let origin = align.anchor_size(point, galley.size()).min;
+        painter.galley(origin, galley, color);
     }
 }
 
@@ -964,7 +1015,18 @@ impl Face {
                 DARK_INK,
             ),
             Face::Selected => (
-                Color32::from_rgba_unmultiplied(111, 181, 237, 67),
+                Color32::from_rgba_unmultiplied(
+                    111,
+                    181,
+                    237,
+                    if pressed {
+                        112
+                    } else if hovered {
+                        90
+                    } else {
+                        67
+                    },
+                ),
                 Color32::from_rgba_unmultiplied(143, 205, 252, 102),
                 INK,
             ),
@@ -995,22 +1057,36 @@ impl Face {
     }
 }
 
+// Short candidates take only the space they need. Share the rest between long ones.
+fn candidate_width_cap(widths: &[f32], mut budget: f32) -> f32 {
+    let mut sorted = widths.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    for (index, &width) in sorted.iter().enumerate() {
+        let share = budget / (sorted.len() - index) as f32;
+        if width >= share {
+            return share;
+        }
+        budget -= width;
+    }
+    f32::INFINITY
+}
+
 fn enter_enabled(keyboard: &Keyboard, destination: Destination) -> bool {
-    !matches!(enter_face(keyboard, destination), Face::Disabled)
+    keyboard.composer.has_preedit() || send_enabled(keyboard, destination)
 }
 
 fn enter_face(keyboard: &Keyboard, destination: Destination) -> Face {
-    if keyboard.composer.has_preedit() {
-        return Face::Key;
-    }
-    let text = keyboard.composer.committed();
-    if !text.trim().is_empty()
-        && (destination != Destination::Osc || text.encode_utf16().count() <= CHAT_LIMIT)
-    {
-        Face::Primary
+    if enter_enabled(keyboard, destination) {
+        Face::Key
     } else {
         Face::Disabled
     }
+}
+
+fn send_enabled(keyboard: &Keyboard, destination: Destination) -> bool {
+    let text = keyboard.composer.text();
+    !text.trim().is_empty()
+        && (destination != Destination::Osc || text.encode_utf16().count() <= CHAT_LIMIT)
 }
 
 struct EditorHit {
@@ -1089,6 +1165,67 @@ fn gradient(painter: &Painter, rect: Rect, radius: f32) {
 mod tests {
     use super::*;
     use crate::overlay_surface::pointer_button;
+
+    #[test]
+    fn long_candidates_share_the_row_and_leave_the_page_button_reachable() {
+        let context = egui::Context::default();
+        let mut keyboard = Keyboard::new(context.clone());
+        keyboard.candidates = (0..12)
+            .map(|index| format!("candidate {index} with a long description"))
+            .collect();
+        keyboard.candidates[2] = "a".into();
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            let keys = show_vr(ui, &keyboard, Destination::Osc, true);
+            let mut right = keys.rect.left();
+            let mut count = 0;
+            for (rect, action) in &keys.keys {
+                match action {
+                    Action::Candidate(value) => {
+                        assert!(rect.left() >= right);
+                        let uv = (rect.center() - keys.rect.min) / keys.rect.size();
+                        assert!(matches!(keys.action_at([uv.x, uv.y]), Some(Action::Candidate(hit)) if &hit == value));
+                        right = rect.right();
+                        count += 1;
+                    }
+                    Action::PageCandidates => assert!(rect.left() >= right + 6.),
+                    _ => {}
+                }
+            }
+            assert_eq!(count, CANDIDATE_PAGE_SIZE);
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn vr_editor_actions_are_separate_from_the_text_hit_area() {
+        let context = egui::Context::default();
+        let mut keyboard = Keyboard::new(context.clone());
+        let hit = |keys: &VrKeys, x, y| keys.action_at([x / SIZE[0] as f32, y / SIZE[1] as f32]);
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            let keys = show_vr(ui, &keyboard, Destination::Osc, true);
+            assert!(hit(&keys, 615., 97.).is_none());
+            assert!(hit(&keys, 679., 97.).is_none());
+            assert!(hit(&keys, 754., 97.).is_none());
+            assert!(matches!(hit(&keys, 813., 97.), Some(Action::Paste)));
+        });
+        output.textures_delta.clear();
+        keyboard.apply(Action::Key('a'));
+        let mut clear = None;
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            let keys = show_vr(ui, &keyboard, Destination::Osc, true);
+            assert!(matches!(hit(&keys, 500., 97.), Some(Action::MoveCaret(_))));
+            clear = hit(&keys, 615., 97.);
+            assert!(matches!(clear, Some(Action::Clear)));
+            assert!(matches!(hit(&keys, 679., 97.), Some(Action::Send)));
+            assert!(hit(&keys, 718., 97.).is_none());
+            assert!(matches!(hit(&keys, 754., 97.), Some(Action::Copy)));
+            assert!(matches!(hit(&keys, 813., 97.), Some(Action::Paste)));
+        });
+        output.textures_delta.clear();
+        keyboard.apply(clear.unwrap());
+        assert!(keyboard.composer.text().is_empty());
+        assert!(keyboard.candidates.is_empty());
+    }
 
     #[test]
     fn repeating_keys_stay_held_after_egui_cancels_the_click() {

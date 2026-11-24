@@ -3,3 +3,10 @@ https://opengameart.org/node/122745
 CC0 1.0 Universal: https://creativecommons.org/publicdomain/zero/1.0/
 
 The included samples are trimmed to the initial strike, volume-matched, and faded.
+
+Send, ContentCopy, ContentPaste, Backspace, and KeyboardReturn by Google (Material Icons)
+https://mui.com/material-ui/material-icons/
+https://www.npmjs.com/package/@mui/icons-material/v/7.3.4
+Apache License 2.0 (see the repository LICENSE).
+
+The included PNGs are rasterized from the MUI SVG paths.

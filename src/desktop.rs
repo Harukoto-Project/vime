@@ -399,10 +399,37 @@ impl App {
                     self.toggle();
                 }
             }
+            Action::Copy => {
+                let text = self.keyboard.composer.text();
+                if !text.is_empty() {
+                    let message = match arboard::Clipboard::new()
+                        .and_then(|mut clipboard| clipboard.set_text(text))
+                    {
+                        Ok(()) => tr("クリップボードにコピーしました"),
+                        Err(_) => tr("クリップボードにコピーできませんでした"),
+                    };
+                    self.keyboard.status(message);
+                }
+            }
+            Action::Paste => {
+                let message = match arboard::Clipboard::new()
+                    .and_then(|mut clipboard| clipboard.get_text())
+                {
+                    Ok(text) => match self.keyboard.paste(&text) {
+                        Ok(()) => tr("貼り付けました"),
+                        Err(message) => message,
+                    },
+                    Err(arboard::Error::ContentNotAvailable) => {
+                        tr("クリップボードに貼り付け可能なテキストがありません")
+                    }
+                    Err(_) => tr("クリップボードを読み取れませんでした"),
+                };
+                self.keyboard.status(message);
+            }
             Action::Enter if self.keyboard.composer.has_preedit() => {
                 self.keyboard.apply(Action::Commit)
             }
-            Action::Enter => {
+            Action::Enter | Action::Send => {
                 self.keyboard.finish_typo_edit();
                 let text = self.keyboard.composer.text();
                 let sent = match self.settings.destination {
@@ -564,7 +591,9 @@ impl App {
         let mut entered = false;
         for (hand, action) in actions.into_iter().enumerate() {
             let Some(action) = action else { continue };
-            if matches!(action, Action::Enter) && std::mem::replace(&mut entered, true) {
+            if matches!(action, Action::Enter | Action::Send)
+                && std::mem::replace(&mut entered, true)
+            {
                 continue;
             }
             let close = matches!(action, Action::Close);

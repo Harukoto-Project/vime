@@ -19,6 +19,7 @@ tempfile = "3"
 unicode-segmentation = "1.13"
 
 [target.'cfg(windows)'.dependencies]
+arboard = { version = "3.7", default-features = false }
 base64 = "0.22"
 eframe = { version = "0.37", default-features = false, features = ["clipboard", "default_fonts", "glow", "links"] }
 egui_glow = { version = "0.37", default-features = false }

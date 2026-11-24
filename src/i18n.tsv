@@ -1,8 +1,6 @@
 {0} を取得できません	Could not get {0}	{0}을(를) 가져올 수 없습니다
 {0}に失敗しました (OpenVR {1})	{0} failed (OpenVR {1})	{0} 실패 (OpenVR {1})
 2ボル式で入力 · 한/영で英数字に切り替え	Dubeolsik layout · 한/영 switches to direct input	두벌식으로 입력 · 한/영으로 영숫자 전환
-Enterで確定	Enter to confirm	Enter로 확정
-Enterで送信	Enter to send	Enter로 전송
 LOCALAPPDATA が見つかりません	LOCALAPPDATA was not found	LOCALAPPDATA를 찾을 수 없습니다
 OpenGL を初期化できません	Could not initialize OpenGL	OpenGL을 초기화할 수 없습니다
 OSC ポートまたはキーボード幅が範囲外です	The OSC port or keyboard width is out of range	OSC 포트 또는 키보드 너비가 범위를 벗어났습니다
@@ -10,8 +8,6 @@ OSCパケットを送信しました	Sent the OSC packet	OSC 패킷을 전송했
 OSCQuery で自動検出	Discover via OSCQuery	OSCQuery로 자동 검색
 検出済み · UDP {0}	Detected · UDP {0}	검색됨 · UDP {0}
 未検出時の UDP ポート	Fallback UDP port	검색되지 않을 때의 UDP 포트
-Spaceで次の候補 · Enterで確定	Space for the next candidate · Enter to confirm	Space로 다음 후보 · Enter로 확정
-Spaceで変換 · Enterで確定	Space to convert · Enter to confirm	Space로 변환 · Enter로 확정
 SteamVR アクションセットを取得	Getting the SteamVR action set	SteamVR 액션 세트 가져오기
 SteamVR アクションを取得	Getting the SteamVR action	SteamVR 액션 가져오기
 SteamVR アプリを関連付け	Linking the SteamVR app	SteamVR 앱 연결
@@ -37,7 +33,6 @@ VR の描画先を作成できません	Could not create the VR render target	VR
 VRChat の OSC を有効にしてください	Enable OSC in VRChat	VRChat에서 OSC를 활성화하세요
 VRChat の上限は144文字・9行です	VRChat allows up to 144 characters and 9 lines	VRChat의 제한은 144자·9줄입니다
 VRChat側でOSCを有効にしてください	Enable OSC in VRChat	VRChat에서 OSC를 활성화하세요
-VRアプリの入力欄	VR app text field	VR 앱의 입력란
 VRアプリの入力欄を開き、Windows で前面にします	Open a text field in the VR app and bring it to the front in Windows	VR 앱의 입력란을 열고 Windows에서 앞으로 가져옵니다
 VRアプリの入力欄を開き、Windowsでそのアプリを前面にしてください	Open a text field in the VR app and bring that app to the front in Windows	VR 앱의 입력란을 열고 Windows에서 해당 앱을 앞으로 가져오세요
 VRアプリの入力欄を開き、Windowsで前面にします	Open a text field in the VR app and bring it to the front in Windows	VR 앱의 입력란을 열고 Windows에서 앞으로 가져옵니다
@@ -87,7 +82,16 @@ Windows 開閉ショートカット	Windows toggle shortcut	Windows 열기/닫�
 設定を保存しました	Settings saved	설정을 저장했습니다
 設定を保存できません ({0})	Could not save settings ({0})	설정을 저장할 수 없습니다 ({0})
 先に SteamVR に接続してください	Connect to SteamVR first	먼저 SteamVR에 연결하세요
+送信	Send	전송
 全消去	Clear all	모두 지우기
+コピー	Copy	복사
+貼り付け	Paste	붙여넣기
+クリップボードにコピーしました	Copied to clipboard	클립보드에 복사했습니다
+クリップボードにコピーできませんでした	Could not copy to clipboard	클립보드에 복사하지 못했습니다
+貼り付けました	Pasted	붙여넣었습니다
+クリップボードに貼り付け可能なテキストがありません	Clipboard has no pasteable text	클립보드에 붙여넣을 수 있는 텍스트가 없습니다
+クリップボードを読み取れませんでした	Could not read the clipboard	클립보드를 읽지 못했습니다
+貼り付けると入力欄の上限を超えます	Pasting would exceed the input limit	붙여넣으면 입력란의 글자 수 제한을 초과합니다
 送信する文章を入力してください	Enter a message to send	보낼 문장을 입력하세요
 送信先	Destination	전송 대상
 入力イベントを送信しました	Sent the input events	입력 이벤트를 전송했습니다

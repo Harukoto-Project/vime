@@ -1,3 +1,4 @@
+mod icons;
 mod microsoft_ime;
 mod sound;
 mod spellcheck;
@@ -11,6 +12,7 @@ use std::{
 };
 use typo::{Snapshot, Typo};
 use vime::{
+    i18n::tr,
     ime::{Composer, Language},
     settings::{TypoProvider, TypoSettings},
 };
@@ -37,6 +39,9 @@ pub enum Action {
     ToggleEmoji,
     PageEmoji(i32),
     PageCandidates,
+    Copy,
+    Paste,
+    Send,
     Clear,
     Enter,
     Close,
@@ -55,6 +60,7 @@ impl Action {
 
 const REPEAT_DELAY: Duration = Duration::from_millis(400);
 const REPEAT_INTERVAL: Duration = Duration::from_millis(60);
+const INPUT_LIMIT: usize = 512;
 
 /// Repeats a held key such as Backspace after an initial delay. One repeater
 /// follows one pointer source, because each source keeps its own held state.
@@ -279,25 +285,18 @@ impl Keyboard {
                 | Action::ToggleDirect
                 | Action::MoveSegment(_)
                 | Action::Space
-                | Action::Clear
         );
         let deleting = matches!(action, Action::Backspace) && !was_converting;
         let typing = matches!(action, Action::Key(key) if key.is_alphanumeric() || matches!(key, '\'' | '’'));
-        let clearing = matches!(action, Action::Clear);
         let character =
-            matches!(action, Action::Key(_)) && self.composer.text().chars().count() < 512;
+            matches!(action, Action::Key(_)) && self.composer.text().chars().count() < INPUT_LIMIT;
         let snapshot = (editing && self.typo.as_ref().is_some_and(Typo::enabled))
             .then(|| Snapshot::of(&self.composer));
-        if snapshot.is_some()
-            && !deleting
-            && !typing
-            && !clearing
-            && !matches!(action, Action::CorrectTypo(_))
-        {
+        if snapshot.is_some() && !deleting && !typing && !matches!(action, Action::CorrectTypo(_)) {
             self.finish_typo_edit();
         }
         match action {
-            Action::Key(key) if self.composer.text().chars().count() < 512 => {
+            Action::Key(key) if self.composer.text().chars().count() < INPUT_LIMIT => {
                 if self.direct_input() {
                     self.composer.insert(&key.to_string());
                 } else {
@@ -305,7 +304,7 @@ impl Keyboard {
                 }
                 self.shift = false;
             }
-            Action::Insert(text) if self.composer.text().chars().count() < 512 => {
+            Action::Insert(text) if self.composer.text().chars().count() < INPUT_LIMIT => {
                 self.composer.insert(&text);
                 self.emoji = false;
             }
@@ -332,7 +331,7 @@ impl Keyboard {
             Action::MoveCaret(index) => self.composer.move_caret(index),
             Action::Space if self.composer.converting() => self.composer.next_candidate(),
             Action::Space if self.can_convert() => self.convert(),
-            Action::Space if self.composer.text().chars().count() < 512 => {
+            Action::Space if self.composer.text().chars().count() < INPUT_LIMIT => {
                 self.composer.insert(" ");
             }
             Action::MoveSegment(step) => self.composer.move_segment(step),
@@ -350,14 +349,21 @@ impl Keyboard {
                 self.candidate_page = (self.candidate_page + 1) % pages;
             }
             Action::Clear => self.clear(),
-            Action::Key(_) | Action::Insert(_) | Action::Space | Action::Enter | Action::Close => {}
+            Action::Key(_)
+            | Action::Insert(_)
+            | Action::Space
+            | Action::Copy
+            | Action::Paste
+            | Action::Send
+            | Action::Enter
+            | Action::Close => {}
         }
         if let Some(snapshot) = snapshot
             && let Some(typo) = &mut self.typo
         {
             if was_converting || self.composer.converting() {
                 typo.reset();
-            } else if !clearing {
+            } else {
                 let after = Snapshot::of(&self.composer);
                 if character || snapshot != after {
                     typo.changed(deleting.then_some(snapshot), typing, after);
@@ -379,6 +385,19 @@ impl Keyboard {
             }
         }
         self.status("");
+    }
+
+    pub fn paste(&mut self, text: &str) -> Result<(), &'static str> {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        if text.is_empty() || text.contains('\0') {
+            return Err(tr("クリップボードに貼り付け可能なテキストがありません"));
+        }
+        let remaining = INPUT_LIMIT.saturating_sub(self.composer.text().chars().count());
+        if text.chars().take(remaining + 1).count() > remaining {
+            return Err(tr("貼り付けると入力欄の上限を超えます"));
+        }
+        self.apply(Action::Insert(text));
+        Ok(())
     }
 
     fn convert(&mut self) {
@@ -539,6 +558,35 @@ mod tests {
         let mut keyboard = Keyboard::new(eframe::egui::Context::default());
         keyboard.apply(Action::Space);
         assert_eq!(keyboard.composer.text(), " ");
+    }
+
+    #[test]
+    fn pastes_unicode_at_the_caret_after_committing_preedit() {
+        let mut keyboard = Keyboard::new(eframe::egui::Context::default());
+        keyboard.apply(Action::Insert("前後".into()));
+        keyboard.apply(Action::MoveCaret(1));
+        keys(&mut keyboard, "neko");
+        assert!(keyboard.composer.has_preedit());
+
+        keyboard.paste("한글\r\n🌸").unwrap();
+
+        assert!(!keyboard.composer.has_preedit());
+        assert_eq!(
+            keyboard.composer.committed_parts(),
+            ("前ねこ한글\n🌸", "後")
+        );
+    }
+
+    #[test]
+    fn rejects_paste_over_the_input_limit_without_inserting_partial_text() {
+        let mut keyboard = Keyboard::new(eframe::egui::Context::default());
+        let original = "猫".repeat(INPUT_LIMIT - 1);
+        keyboard.apply(Action::Insert(original.clone()));
+
+        assert!(keyboard.paste("🌸🌸").is_err());
+        assert_eq!(keyboard.composer.committed(), original);
+        keyboard.paste("🌸").unwrap();
+        assert_eq!(keyboard.composer.committed().chars().count(), INPUT_LIMIT);
     }
 
     #[test]
