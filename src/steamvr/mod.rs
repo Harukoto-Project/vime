@@ -240,6 +240,7 @@ impl SteamVr {
             toggle: action(actions::TOGGLE)?,
             aim: action(actions::AIM)?,
             click: action(actions::CLICK)?,
+            close: action(actions::CLOSE)?,
             hands: [hand(c"/user/hand/left")?, hand(c"/user/hand/right")?],
         };
 
@@ -388,7 +389,9 @@ impl SteamVr {
             self.world_shown = false;
         }
         self.panel = None;
-        self.worker.as_ref().unwrap().state().set_panel(None);
+        let worker = self.worker.as_ref().unwrap();
+        worker.state().set_panel(None);
+        worker.wake();
         Ok(())
     }
 

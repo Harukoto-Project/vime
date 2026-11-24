@@ -12,6 +12,8 @@ pub const POINTER_SET: &std::ffi::CStr = c"/actions/keyboard";
 pub const TOGGLE: &std::ffi::CStr = c"/actions/vime/in/toggle";
 pub const AIM: &std::ffi::CStr = c"/actions/keyboard/in/aim";
 pub const CLICK: &std::ffi::CStr = c"/actions/keyboard/in/click";
+pub const CLOSE: &std::ffi::CStr = c"/actions/keyboard/in/close";
+const CAPTURE: &str = "/actions/keyboard/in/capture";
 
 pub fn runtime_dll() -> Option<PathBuf> {
     let registered = env::var_os("LOCALAPPDATA")
@@ -46,22 +48,41 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
         ("oculus_touch", "joystick", "joystick"),
         ("vive_controller", "trackpad", "button"),
     ] {
-        let name = format!("binding_{controller}_v3.json");
-        let inputs = |side: &str, control: &str, mode: &str, action: &str| {
-            json!({
-                "path": format!("/user/hand/{side}/input/{control}"),
-                "mode": mode,
-                "inputs": { "click": { "output": action } }
-            })
-        };
+        let name = format!("binding_{controller}_v4.json");
         let trigger = |hand: &str| {
-            let mut binding = inputs(hand, "trigger", "button", CLICK.to_str().unwrap());
+            let mut binding = button(hand, "trigger", "button", "click", CLICK.to_str().unwrap());
             binding["parameters"] = json!({
                 "click_activate_threshold": "0.45",
                 "click_deactivate_threshold": "0.30",
             });
             binding
         };
+        let mut keyboard_sources = vec![trigger("left"), trigger("right")];
+        for hand in ["left", "right"] {
+            let controls: &[&str] = match (controller, hand) {
+                ("knuckles", _) => &["a", "b", "grip", "trackpad", "system"],
+                ("oculus_touch", "left") => &["x", "y", "grip", "system"],
+                ("oculus_touch", _) => &["a", "b", "grip"],
+                ("vive_controller", _) => &["grip", "application_menu", "trackpad", "system"],
+                _ => unreachable!(),
+            };
+            for &control in controls {
+                let action =
+                    if (controller, hand, control) == ("vive_controller", "right", "trackpad") {
+                        CLOSE.to_str().unwrap()
+                    } else {
+                        CAPTURE
+                    };
+                let mut binding = button(hand, control, "button", "click", action);
+                if controller == "knuckles" && matches!(control, "grip" | "trackpad") {
+                    binding["parameters"] = json!({ "force_input": "force" });
+                }
+                keyboard_sources.push(binding);
+            }
+            if controller == "oculus_touch" {
+                keyboard_sources.push(button(hand, "thumbrest", "button", "touch", CAPTURE));
+            }
+        }
         let poses: Vec<_> = ["left", "right"]
             .into_iter()
             .map(|side| {
@@ -77,14 +98,14 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
                 "app_key": APP_KEY.to_str().unwrap(),
                 "controller_type": controller,
                 "name": "ViME",
-                "description": "Toggle ViME and select keyboard keys",
+                "description": "Toggle ViME, select keys, and reserve non-joystick controls while typing",
                 "bindings": {
                     (TOGGLE_SET.to_str().unwrap()): {
-                        "sources": [inputs("right", control, mode, TOGGLE.to_str().unwrap())]
+                        "sources": [button("right", control, mode, "click", TOGGLE.to_str().unwrap())]
                     },
                     (POINTER_SET.to_str().unwrap()): {
                         "poses": poses,
-                        "sources": [trigger("left"), trigger("right")]
+                        "sources": keyboard_sources
                     }
                 }
             }),
@@ -103,7 +124,9 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
             "actions": [
                 { "name": TOGGLE.to_str().unwrap(), "type": "boolean", "requirement": "optional" },
                 { "name": AIM.to_str().unwrap(), "type": "pose", "requirement": "optional" },
-                { "name": CLICK.to_str().unwrap(), "type": "boolean", "requirement": "optional" }
+                { "name": CLICK.to_str().unwrap(), "type": "boolean", "requirement": "optional" },
+                { "name": CLOSE.to_str().unwrap(), "type": "boolean", "requirement": "optional" },
+                { "name": CAPTURE, "type": "boolean", "requirement": "optional" }
             ],
             "default_bindings": defaults,
             "localization": [{
@@ -112,7 +135,9 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
                 (POINTER_SET.to_str().unwrap()): "Keyboard",
                 (TOGGLE.to_str().unwrap()): "Toggle keyboard",
                 (AIM.to_str().unwrap()): "Aim at keyboard",
-                (CLICK.to_str().unwrap()): "Press key"
+                (CLICK.to_str().unwrap()): "Press key",
+                (CLOSE.to_str().unwrap()): "Close keyboard",
+                (CAPTURE): "Block game input while typing"
             }]
         }),
     )?;
@@ -120,6 +145,14 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
     let application = directory.join("vime.vrmanifest");
     write_application_manifest(&application)?;
     Ok((application, actions))
+}
+
+fn button(hand: &str, control: &str, mode: &str, input: &str, action: &str) -> Value {
+    json!({
+        "path": format!("/user/hand/{hand}/input/{control}"),
+        "mode": mode,
+        "inputs": { (input): { "output": action } }
+    })
 }
 
 pub(super) fn write_application_manifest(application: &Path) -> io::Result<()> {
@@ -170,5 +203,42 @@ mod tests {
             application["action_manifest_path"],
             actions.file_name().unwrap().to_str().unwrap()
         );
+    }
+
+    #[test]
+    fn keyboard_bindings_leave_joysticks_available_to_the_game() {
+        let directory = tempfile::tempdir().unwrap();
+        let (_, manifest_path) = write_manifests(directory.path()).unwrap();
+        let manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let defaults = manifest["default_bindings"].as_array().unwrap();
+        assert_eq!(defaults.len(), 3);
+        let keyboard = POINTER_SET.to_str().unwrap();
+        for default in defaults {
+            let path = manifest_path.with_file_name(default["binding_url"].as_str().unwrap());
+            let binding: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            let sources = binding["bindings"][keyboard]["sources"].as_array().unwrap();
+            let input = |hand, control| {
+                let path = format!("/user/hand/{hand}/input/{control}");
+                sources.iter().find(|source| source["path"] == path)
+            };
+            for hand in ["left", "right"] {
+                assert!(input(hand, "thumbstick").is_none());
+                assert!(input(hand, "joystick").is_none());
+                assert_eq!(
+                    input(hand, "trigger").unwrap()["inputs"]["click"]["output"],
+                    CLICK.to_str().unwrap()
+                );
+                assert_eq!(
+                    input(hand, "grip").unwrap()["inputs"]["click"]["output"],
+                    CAPTURE
+                );
+            }
+            if default["controller_type"] == "vive_controller" {
+                assert_eq!(
+                    input("right", "trackpad").unwrap()["inputs"]["click"]["output"],
+                    CLOSE.to_str().unwrap()
+                );
+            }
+        }
     }
 }

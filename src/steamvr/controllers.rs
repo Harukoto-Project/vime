@@ -26,6 +26,7 @@ pub struct Actions {
     pub toggle: u64,
     pub aim: u64,
     pub click: u64,
+    pub close: u64,
     pub hands: [u64; 2],
 }
 
@@ -59,6 +60,7 @@ impl VrWorker {
             width: 1.08,
             panel: None,
             filters: Default::default(),
+            toggle_armed: false,
             armed: [false; 2],
             frame: Frame::default(),
             pending: false,
@@ -185,6 +187,7 @@ pub struct ControllerState {
     width: f32,
     panel: Option<Matrix>,
     filters: [geometry::PointerFilter; 2],
+    toggle_armed: bool,
     armed: [bool; 2],
     frame: Frame,
     pending: bool,
@@ -229,6 +232,9 @@ impl ControllerState {
         if panel.is_none() {
             self.keyboard_targets = None;
         }
+        // The Vive shortcut moves between action sets on visibility changes.
+        // Wait for release so a held press can't immediately undo the toggle.
+        self.toggle_armed = false;
         self.frame.toggle = false;
         self.frame.keyboard_presses.clear();
         self.clear_pointers();
@@ -323,22 +329,21 @@ impl ControllerState {
         sets[0].set = self.actions.toggle_set;
         sets[0].priority = 1;
         sets[1].set = self.actions.pointer_set;
-        sets[1].priority = 20;
+        // Only sources bound to the keyboard set override the scene application's inputs.
+        sets[1].priority = abi::OVERLAY_GLOBAL_ACTION_PRIORITY;
         if self.input.update(
             sets.as_ptr(),
             size_of::<ActionSet>() as u32,
             if panel.is_some() { 2 } else { 1 },
         ) != 0
         {
+            self.toggle_armed = false;
             self.clear_pointers();
             return before_down != self.frame.keyboard_down
                 || before_feedback != self.frame.keyboard_feedback;
         }
 
-        let toggle = !self.frame.dashboard_visible
-            && self
-                .digital(self.actions.toggle, 0)
-                .is_some_and(|data| data.state && data.changed);
+        let toggle = self.poll_toggle(panel.is_some());
         self.frame.toggle |= toggle;
 
         let Some(panel) = panel else {
@@ -381,6 +386,20 @@ impl ControllerState {
             || pressed
             || before_down != self.frame.keyboard_down
             || before_feedback != self.frame.keyboard_feedback
+    }
+
+    fn poll_toggle(&mut self, keyboard_visible: bool) -> bool {
+        let mut shortcuts = [None, None];
+        if !self.frame.dashboard_visible {
+            shortcuts[0] = self.digital(self.actions.toggle, 0);
+            if keyboard_visible {
+                shortcuts[1] = self.digital(self.actions.close, 0);
+            }
+        }
+        let down = shortcuts.iter().flatten().any(|data| data.state);
+        let pressed = self.toggle_armed && down;
+        self.toggle_armed = !down && shortcuts.iter().any(Option::is_some);
+        pressed
     }
 
     fn pointer_position(

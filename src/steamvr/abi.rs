@@ -13,6 +13,7 @@ pub const OVERLAY: &CStr = c"FnTable:IVROverlay_026";
 pub const INPUT: &CStr = c"FnTable:IVRInput_010";
 pub const STANDING: i32 = 1;
 pub const APPLICATION_OVERLAY: i32 = 2;
+pub const OVERLAY_GLOBAL_ACTION_PRIORITY: i32 = 0x0100_0000;
 pub const HMD: u32 = 0;
 pub const SECONDS_FROM_VSYNC_TO_PHOTONS: i32 = 2001;
 pub const DISPLAY_FREQUENCY: i32 = 2002;
@@ -49,7 +50,7 @@ pub struct Digital {
     pub active: bool,
     origin: u64,
     pub state: bool,
-    pub changed: bool,
+    _changed: bool,
     update_time: f32,
 }
 
