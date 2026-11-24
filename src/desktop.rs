@@ -281,12 +281,20 @@ impl App {
         Ok(())
     }
 
-    fn connect(&mut self) {
+    fn connect(&mut self, context: &egui::Context) {
         if let Err(error) = &self.surfaces {
             self.steamvr_message = error.clone();
             return;
         }
-        match SteamVr::connect(&self.directory, keyboard::SIZE, dashboard::SIZE) {
+        let context = context.clone();
+        match SteamVr::connect_with_wake(
+            &self.directory,
+            keyboard::SIZE,
+            dashboard::SIZE,
+            move || {
+                context.request_repaint();
+            },
+        ) {
             Ok(vr) => {
                 self.steamvr_message.clear();
                 self.dashboard.reset();
@@ -467,6 +475,43 @@ impl App {
         if dashboard_rendered {
             let held = self.dashboard.held_key().cloned();
             self.pointer_repeats(DASHBOARD, click, held);
+        }
+    }
+
+    fn overlay_paint_delay(&self, now: Instant) -> Option<Duration> {
+        let (Some(vr), Ok(surfaces)) = (&self.vr, &self.surfaces) else {
+            return None;
+        };
+        let (caret_visible, _) = self.keyboard.caret_blink(now);
+        let revision = self.keyboard.revision;
+        let keyboard_changed = vr.visible()
+            && (self.last_world != Some((revision, self.settings.destination, caret_visible))
+                || self.draw_errors[0].is_some());
+        let dashboard_changed = self.dashboard.redraw
+            || self.draw_errors[1].is_some()
+            || (self.dashboard.active
+                && self.dashboard_revision != Some((revision, caret_visible)));
+        [
+            keyboard_changed.then(|| surfaces.keyboard.present_delay(now)),
+            dashboard_changed.then(|| surfaces.dashboard.present_delay(now)),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    fn schedule_vr_deadlines(&self, context: &egui::Context, now: Instant) {
+        let keyboard_visible = self.vr.as_ref().is_some_and(SteamVr::visible);
+        if keyboard_visible || self.dashboard.active {
+            context.request_repaint_after(self.keyboard.caret_blink(now).1);
+        }
+        let dashboard_repeat = self.dashboard.held_key().is_some();
+        let repeaters = self
+            .world_repeaters
+            .iter()
+            .chain(dashboard_repeat.then_some(&self.repeaters[DASHBOARD]));
+        if let Some(wait) = repeaters.filter_map(|repeater| repeater.wait(now)).min() {
+            context.request_repaint_after(wait);
         }
     }
 
@@ -769,7 +814,7 @@ impl App {
                     self.toggle();
                 }
             } else if ui.add(primary(tr("SteamVR に接続"))).clicked() {
-                self.connect();
+                self.connect(ui.ctx());
             }
         });
     }
@@ -1405,7 +1450,7 @@ impl eframe::App for App {
         }
         self.keyboard.poll_candidates();
         if std::mem::take(&mut self.auto_connect) {
-            self.connect();
+            self.connect(context);
         }
         if self.hotkeys.as_ref().is_some_and(Hotkeys::pressed) {
             self.toggle();
@@ -1457,51 +1502,52 @@ impl eframe::App for App {
             self.keyboard_action(action);
         }
         let now = Instant::now();
-        let (caret_visible, blink_after) = self.keyboard.caret_blink(now);
         let desktop_minimized = context.input(|input| input.viewport().minimized == Some(true));
         if !desktop_minimized {
-            context.request_repaint_after(blink_after);
+            context.request_repaint_after(self.keyboard.caret_blink(now).1);
         }
-        if let (Some(vr), Ok(surfaces)) = (&self.vr, &self.surfaces) {
-            let visible = vr.visible() || self.dashboard.active;
-            let keyboard_changed = vr.visible()
-                && surfaces.keyboard.can_present(now)
-                && (self.last_world
-                    != Some((
-                        self.keyboard.revision,
-                        self.settings.destination,
-                        caret_visible,
-                    ))
-                    || self.draw_errors[0].is_some());
-            let dashboard_changed = surfaces.dashboard.can_present(now)
-                && (self.dashboard.redraw
-                    || self.draw_errors[1].is_some()
-                    || (self.dashboard.active
-                        && self.dashboard_revision
-                            != Some((self.keyboard.revision, caret_visible))));
-            if (keyboard_changed || dashboard_changed)
-                && self
-                    .paint_requested
-                    .is_none_or(|last| now - last >= HIDDEN_PAINT_RETRY)
-            {
+        self.schedule_vr_deadlines(context, now);
+        if let Some(delay) = self.overlay_paint_delay(now) {
+            let hidden_retry = self.paint_requested.map_or(Duration::ZERO, |last| {
+                HIDDEN_PAINT_RETRY.saturating_sub(now - last)
+            });
+            let delay = delay.max(hidden_retry);
+            if delay.is_zero() {
                 self.paint_requested = Some(now);
                 context.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
-            }
-            // Poll VR independently of the desktop monitor's refresh rate.
-            context.request_repaint_after(Duration::from_micros(if visible {
-                11_111
             } else {
-                33_333
-            }));
+                context.request_repaint_after(delay);
+            }
         }
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.paint_requested = None;
         self.paint_overlay(ui.ctx());
-        if ui.input(|input| input.viewport().minimized == Some(true)) {
-            return;
+        if ui.input(|input| input.viewport().minimized != Some(true)) {
+            self.desktop_ui(ui);
         }
+        let now = Instant::now();
+        self.schedule_vr_deadlines(ui.ctx(), now);
+        if let Some(delay) = self.overlay_paint_delay(now) {
+            ui.ctx().request_repaint_after(delay);
+        }
+    }
+
+    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        self.disconnect();
+        if gl.is_some()
+            && let Ok(surfaces) = std::mem::replace(&mut self.surfaces, Err(String::new()))
+        {
+            surfaces.keyboard.destroy();
+            surfaces.dashboard.destroy();
+        }
+        self.update.apply_on_exit();
+    }
+}
+
+impl App {
+    fn desktop_ui(&mut self, ui: &mut Ui) {
         // The root ui is rebuilt by eframe, including after a hidden-window VR frame.
         let margin = if ui.available_width() >= WIDE_LAYOUT {
             Margin::symmetric(27, 18)
@@ -1528,17 +1574,6 @@ impl eframe::App for App {
                         });
                     });
             });
-    }
-
-    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
-        self.disconnect();
-        if gl.is_some()
-            && let Ok(surfaces) = std::mem::replace(&mut self.surfaces, Err(String::new()))
-        {
-            surfaces.keyboard.destroy();
-            surfaces.dashboard.destroy();
-        }
-        self.update.apply_on_exit();
     }
 }
 

@@ -112,7 +112,12 @@ impl OverlaySurface {
     }
 
     pub fn can_present(&self, now: Instant) -> bool {
-        self.retry_after.is_none_or(|retry| retry <= now)
+        self.present_delay(now).is_zero()
+    }
+
+    pub fn present_delay(&self, now: Instant) -> Duration {
+        self.retry_after
+            .map_or(Duration::ZERO, |retry| retry.saturating_duration_since(now))
     }
 
     pub fn reset(&mut self) {

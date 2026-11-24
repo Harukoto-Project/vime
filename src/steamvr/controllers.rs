@@ -1,6 +1,6 @@
 use super::{
-    Result, abi,
-    abi::{ActionPose, ActionSet, Digital, Input, Matrix, Overlay},
+    DashboardEvent, Frame, Result, SteamVr, abi,
+    abi::{ActionPose, ActionSet, Digital, Event, Input, Matrix, Overlay, System},
     checked, geometry,
 };
 use std::{
@@ -13,18 +13,12 @@ use std::{
 };
 
 const IDLE_INTERVAL: Duration = Duration::from_millis(33);
-const SYNC_TIMEOUT_MS: u32 = 16;
+const DEFAULT_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+const MAX_PENDING_INPUTS: usize = 128;
 const CURSOR_SIZE: u32 = 24;
 const CURSOR_SCALE_PRESSED: f32 = 8. / 6.5;
 
 pub type KeyPresses = [Option<[f32; 2]>; 2];
-
-#[derive(Default)]
-pub struct ControllerEvents {
-    pub toggle: bool,
-    pub presses: Vec<KeyPresses>,
-    pub down: [bool; 2],
-}
 
 pub struct Actions {
     pub toggle_set: u64,
@@ -35,56 +29,76 @@ pub struct Actions {
     pub hands: [u64; 2],
 }
 
-pub struct ControllerWorker {
+pub struct VrWorker {
     state: Arc<Mutex<ControllerState>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
-impl ControllerWorker {
+impl VrWorker {
     pub fn start(
+        session: &SteamVr,
         input: Input,
-        overlay: Overlay,
         actions: Actions,
-        keyboard: u64,
-        cursors: [u64; 2],
         size: [u32; 2],
-        width: f32,
+        wake_ui: impl Fn() + Send + 'static,
     ) -> Result<Self> {
-        let sync = Overlay(overlay.0);
+        let system = System(session.system.0);
+        let sync = Overlay(session.overlay.0);
+        let dashboard = session.dashboard;
         let state = Arc::new(Mutex::new(ControllerState {
             input,
-            overlay,
+            overlay: Overlay(session.overlay.0),
             actions,
-            keyboard,
-            cursors: cursors.map(|handle| Cursor {
+            keyboard: session.handle,
+            cursors: session.cursors.map(|handle| Cursor {
                 handle,
                 position: None,
                 width: None,
             }),
             size: size.map(|axis| axis as f32),
-            width,
+            width: 1.08,
             panel: None,
             filters: Default::default(),
             armed: [false; 2],
-            events: ControllerEvents::default(),
+            frame: Frame::default(),
+            pending: false,
+            dashboard_position: None,
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let worker_state = state.clone();
         let worker_stop = stop.clone();
         let thread = thread::Builder::new()
-            .name("vime-vr-controllers".into())
+            .name("vime-vr".into())
             .spawn(move || {
+                let mut frame_interval = DEFAULT_FRAME_INTERVAL;
+                let mut check_frequency = Instant::now();
                 while !worker_stop.load(Ordering::Relaxed) {
-                    let pointing = worker_state.lock().unwrap().poll();
-                    if pointing {
+                    let (notify, quit, active) = {
+                        let mut state = worker_state.lock().unwrap();
+                        let changed = state.poll(&system, dashboard);
+                        // A single wake covers all input queued before the UI drains it.
+                        let notify = changed && !std::mem::replace(&mut state.pending, true);
+                        let active = state.frame.dashboard_active
+                            || (state.panel.is_some() && !state.frame.dashboard_visible);
+                        (notify, state.frame.quit, active)
+                    };
+                    if notify {
+                        wake_ui();
+                    }
+                    if quit {
+                        break;
+                    }
+                    if active {
                         let start = Instant::now();
-                        if sync.wait_frame_sync(SYNC_TIMEOUT_MS) != 0 {
-                            // A stopped compositor can return immediately.
-                            thread::park_timeout(
-                                Duration::from_millis(u64::from(SYNC_TIMEOUT_MS))
-                                    .saturating_sub(start.elapsed()),
-                            );
+                        if start >= check_frequency {
+                            frame_interval = display_interval(&system);
+                            check_frequency = start + Duration::from_secs(1);
+                        }
+                        let timeout_ms = frame_interval.as_micros().div_ceil(1_000) as u32;
+                        if sync.wait_frame_sync(timeout_ms) != 0 {
+                            // A stopped compositor can report an error immediately.
+                            thread::park_timeout(frame_interval.saturating_sub(start.elapsed()));
                         }
                     } else {
                         thread::park_timeout(IDLE_INTERVAL);
@@ -110,13 +124,23 @@ impl ControllerWorker {
     }
 }
 
-impl Drop for ControllerWorker {
+impl Drop for VrWorker {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         self.wake();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+fn display_interval(system: &System) -> Duration {
+    let mut error = 0;
+    let hz = system.float_property(abi::HMD, abi::DISPLAY_FREQUENCY, &mut error);
+    if error == 0 && (30.0..=1_000.0).contains(&hz) {
+        Duration::from_secs_f64(1.0 / f64::from(hz))
+    } else {
+        DEFAULT_FRAME_INTERVAL
     }
 }
 
@@ -131,15 +155,22 @@ pub struct ControllerState {
     panel: Option<Matrix>,
     filters: [geometry::PointerFilter; 2],
     armed: [bool; 2],
-    events: ControllerEvents,
+    frame: Frame,
+    pending: bool,
+    dashboard_position: Option<[f32; 2]>,
 }
 
 impl ControllerState {
-    pub fn take_events(&mut self) -> ControllerEvents {
-        ControllerEvents {
-            toggle: std::mem::take(&mut self.events.toggle),
-            presses: std::mem::take(&mut self.events.presses),
-            down: self.events.down,
+    pub fn take_frame(&mut self) -> Frame {
+        self.pending = false;
+        Frame {
+            toggle: std::mem::take(&mut self.frame.toggle) && !self.frame.dashboard_visible,
+            keyboard_presses: std::mem::take(&mut self.frame.keyboard_presses),
+            keyboard_down: self.frame.keyboard_down,
+            dashboard_visible: self.frame.dashboard_visible,
+            dashboard_active: self.frame.dashboard_active,
+            dashboard_events: std::mem::take(&mut self.frame.dashboard_events),
+            quit: self.frame.quit,
         }
     }
 
@@ -158,22 +189,94 @@ impl ControllerState {
 
     pub fn set_panel(&mut self, panel: Option<Matrix>) {
         self.panel = panel;
-        self.events = ControllerEvents::default();
+        self.frame.toggle = false;
+        self.frame.keyboard_presses.clear();
         self.clear_pointers();
     }
 
     fn clear_pointers(&mut self) {
         self.armed = [false; 2];
-        self.events.down = [false; 2];
+        self.frame.keyboard_down = [false; 2];
         for (filter, cursor) in self.filters.iter_mut().zip(&mut self.cursors) {
             filter.reset();
             cursor.hide(&self.overlay);
         }
     }
 
-    fn poll(&mut self) -> bool {
-        let dashboard = self.overlay.dashboard_visible();
-        let panel = self.panel.filter(|_| !dashboard);
+    fn poll(&mut self, system: &System, dashboard: u64) -> bool {
+        let mut event = Event::default();
+        for _ in 0..64 {
+            if !system.poll_event(&mut event, size_of::<Event>() as u32) {
+                break;
+            }
+            if event.kind == abi::QUIT {
+                self.frame.quit = true;
+                return true;
+            }
+        }
+
+        let visible = self.overlay.dashboard_visible();
+        let active = visible && self.overlay.dashboard_active(dashboard);
+        let mut changed =
+            visible != self.frame.dashboard_visible || active != self.frame.dashboard_active;
+        if !active && self.frame.dashboard_active {
+            self.frame.dashboard_events.clear();
+            self.queue_dashboard_event(DashboardEvent::Leave);
+        }
+        self.frame.dashboard_visible = visible;
+        self.frame.dashboard_active = active;
+
+        for _ in 0..64 {
+            if !self
+                .overlay
+                .poll_event(dashboard, &mut event, size_of::<Event>() as u32)
+            {
+                break;
+            }
+            if !active {
+                continue;
+            }
+            match event.kind {
+                abi::MOUSE_MOVE if self.dashboard_position != Some(event.mouse().0) => {
+                    self.queue_dashboard_event(DashboardEvent::Move(event.mouse().0));
+                }
+                abi::MOUSE_DOWN | abi::MOUSE_UP if event.mouse().1 == abi::MOUSE_LEFT => {
+                    self.queue_dashboard_event(DashboardEvent::Button {
+                        position: event.mouse().0,
+                        down: event.kind == abi::MOUSE_DOWN,
+                    });
+                }
+                abi::FOCUS_LEAVE | abi::OVERLAY_HIDDEN => {
+                    self.queue_dashboard_event(DashboardEvent::Leave);
+                }
+                _ => continue,
+            }
+            changed = true;
+        }
+        self.poll_controllers() || changed
+    }
+
+    fn queue_dashboard_event(&mut self, event: DashboardEvent) {
+        let events = &mut self.frame.dashboard_events;
+        if let DashboardEvent::Move(position) = event {
+            self.dashboard_position = Some(position);
+            if let Some(last @ DashboardEvent::Move(_)) = events.last_mut() {
+                *last = event;
+                return;
+            }
+        } else if matches!(event, DashboardEvent::Leave) {
+            self.dashboard_position = None;
+        }
+        if events.len() == MAX_PENDING_INPUTS {
+            events.clear();
+            events.push(DashboardEvent::Leave);
+        }
+        events.push(event);
+    }
+
+    fn poll_controllers(&mut self) -> bool {
+        let panel = self.panel.filter(|_| !self.frame.dashboard_visible);
+        let before_down = self.frame.keyboard_down;
         let mut sets = [ActionSet::default(), ActionSet::default()];
         sets[0].set = self.actions.toggle_set;
         sets[0].priority = 1;
@@ -186,19 +289,19 @@ impl ControllerState {
         ) != 0
         {
             self.clear_pointers();
-            return panel.is_some();
+            return before_down != self.frame.keyboard_down;
         }
 
-        let toggle = !dashboard
+        let toggle = !self.frame.dashboard_visible
             && self
                 .digital(self.actions.toggle, 0)
                 .is_some_and(|data| data.state && data.changed);
-        self.events.toggle |= toggle;
+        self.frame.toggle |= toggle;
 
         let Some(panel) = panel else {
             self.clear_pointers();
-            self.events.presses.clear();
-            return false;
+            self.frame.keyboard_presses.clear();
+            return toggle || before_down != self.frame.keyboard_down;
         };
         let now = Instant::now();
         let mut presses = [None; 2];
@@ -208,7 +311,7 @@ impl ControllerState {
             let down = click.as_ref().is_some_and(|data| data.state);
             let pressed = self.armed[hand] && down;
             self.armed[hand] = click.is_some_and(|data| !data.state);
-            self.events.down[hand] = down;
+            self.frame.keyboard_down[hand] = down;
             if let Some(uv) = self.pointer_position(hand, source, &panel, now) {
                 self.cursors[hand].update(
                     &self.overlay,
@@ -223,10 +326,11 @@ impl ControllerState {
                 self.cursors[hand].hide(&self.overlay);
             }
         }
-        if !toggle && presses.iter().any(Option::is_some) {
-            self.events.presses.push(presses);
+        let pressed = !toggle && presses.iter().any(Option::is_some);
+        if pressed && self.frame.keyboard_presses.len() < MAX_PENDING_INPUTS {
+            self.frame.keyboard_presses.push(presses);
         }
-        true
+        toggle || pressed || before_down != self.frame.keyboard_down
     }
 
     fn pointer_position(

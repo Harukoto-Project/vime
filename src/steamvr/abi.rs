@@ -13,6 +13,8 @@ pub const OVERLAY: &CStr = c"FnTable:IVROverlay_026";
 pub const INPUT: &CStr = c"FnTable:IVRInput_010";
 pub const STANDING: i32 = 1;
 pub const APPLICATION_OVERLAY: i32 = 2;
+pub const HMD: u32 = 0;
+pub const DISPLAY_FREQUENCY: i32 = 2002;
 pub const QUIT: u32 = 700;
 pub const MOUSE_MOVE: u32 = 300;
 pub const MOUSE_DOWN: u32 = 301;
@@ -121,6 +123,7 @@ macro_rules! table {
 
 table!(System {
     tracking_pose: 11(origin: i32, prediction: f32, output: *mut Pose, count: u32) -> ();
+    float_property: 22(device: u32, property: i32, error: *mut i32) -> f32;
     poll_event: 29(output: *mut Event, size: u32) -> bool;
     acknowledge_quit: 43() -> ();
 });
@@ -152,8 +155,9 @@ table!(Overlay {
     dashboard_active: 69(handle: u64) -> bool;
 });
 
-// These tables are immutable. SteamVr joins its controller worker before
+// These tables are immutable. SteamVr joins its VR worker before
 // acknowledging runtime shutdown or releasing the DLL that owns the tables.
+unsafe impl Send for System {}
 unsafe impl Send for Overlay {}
 unsafe impl Send for Input {}
 

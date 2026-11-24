@@ -7,8 +7,8 @@ use crate::{
     brand,
     i18n::{tr, tr_args},
 };
-use abi::{Applications, Event, Input, Matrix, Overlay, Pose, System, Texture};
-use controllers::{Actions, ControllerWorker, KeyPresses};
+use abi::{Applications, Input, Matrix, Overlay, Pose, System, Texture};
+use controllers::{Actions, KeyPresses, VrWorker};
 use libloading::Library;
 use std::{
     ffi::{CStr, CString, c_void},
@@ -110,7 +110,7 @@ pub struct SteamVr {
     handle: u64,
     dashboard: u64,
     cursors: [u64; 2],
-    controllers: Option<ControllerWorker>,
+    worker: Option<VrWorker>,
     panel: Option<Matrix>,
     world_shown: bool,
     quitting: bool,
@@ -121,6 +121,15 @@ impl SteamVr {
         directory: &Path,
         keyboard_size: [u32; 2],
         dashboard_size: [u32; 2],
+    ) -> Result<Self> {
+        Self::connect_with_wake(directory, keyboard_size, dashboard_size, || {})
+    }
+
+    pub fn connect_with_wake(
+        directory: &Path,
+        keyboard_size: [u32; 2],
+        dashboard_size: [u32; 2],
+        wake_ui: impl Fn() + Send + 'static,
     ) -> Result<Self> {
         let runtime = Runtime::connect()?;
         let (app_path, actions_path) =
@@ -198,7 +207,7 @@ impl SteamVr {
             handle,
             dashboard: 0,
             cursors: [0; 2],
-            controllers: None,
+            worker: None,
             panel: None,
             world_shown: false,
             quitting: false,
@@ -206,14 +215,12 @@ impl SteamVr {
         session.configure_texture(handle)?;
         session.create_dashboard(dashboard_size)?;
         session.create_cursors()?;
-        session.controllers = Some(ControllerWorker::start(
+        session.worker = Some(VrWorker::start(
+            &session,
             input,
-            Overlay(session.overlay.0),
             controller_actions,
-            handle,
-            session.cursors,
             keyboard_size,
-            1.08,
+            wake_ui,
         )?);
         Ok(session)
     }
@@ -283,11 +290,7 @@ impl SteamVr {
 
     pub fn open_bindings(&self, desktop: bool) -> Result<()> {
         checked(
-            self.controllers
-                .as_ref()
-                .unwrap()
-                .state()
-                .open_bindings(desktop),
+            self.worker.as_ref().unwrap().state().open_bindings(desktop),
             tr("SteamVR バインド画面を開く"),
         )
     }
@@ -322,7 +325,7 @@ impl SteamVr {
             self.overlay.set_width(self.handle, width),
             tr("VRキーボードの幅を変更"),
         )?;
-        self.controllers.as_ref().unwrap().state().set_width(width);
+        self.worker.as_ref().unwrap().state().set_width(width);
         Ok(())
     }
 
@@ -332,7 +335,7 @@ impl SteamVr {
             self.world_shown = false;
         }
         self.panel = None;
-        self.controllers.as_ref().unwrap().state().set_panel(None);
+        self.worker.as_ref().unwrap().state().set_panel(None);
         Ok(())
     }
 
@@ -357,78 +360,27 @@ impl SteamVr {
         if matches!(surface, Surface::Keyboard) && self.visible() && !self.world_shown {
             checked(self.overlay.show(handle), tr("VRキーボードを表示"))?;
             self.world_shown = true;
-            let controllers = self.controllers.as_ref().unwrap();
-            controllers.state().set_panel(self.panel);
-            controllers.wake();
+            let worker = self.worker.as_ref().unwrap();
+            worker.state().set_panel(self.panel);
+            worker.wake();
         }
         Ok(())
     }
 
     pub fn poll(&mut self) -> Frame {
-        let mut event = Event::default();
-        for _ in 0..64 {
-            if !self
-                .system
-                .poll_event(&mut event, size_of::<Event>() as u32)
-            {
-                break;
-            }
-            if event.kind == abi::QUIT {
-                drop(self.controllers.take());
-                self.system.acknowledge_quit();
-                self.quitting = true;
-                return Frame {
-                    quit: true,
-                    ..Frame::default()
-                };
-            }
+        let frame = self.worker.as_ref().unwrap().state().take_frame();
+        if frame.quit {
+            drop(self.worker.take());
+            self.system.acknowledge_quit();
+            self.quitting = true;
         }
-
-        let dashboard = self.overlay.dashboard_visible();
-        let dashboard_active = dashboard && self.overlay.dashboard_active(self.dashboard);
-        let mut dashboard_events = Vec::new();
-        for _ in 0..64 {
-            if !self
-                .overlay
-                .poll_event(self.dashboard, &mut event, size_of::<Event>() as u32)
-            {
-                break;
-            }
-            if dashboard_active {
-                let input = match event.kind {
-                    abi::MOUSE_MOVE => Some(DashboardEvent::Move(event.mouse().0)),
-                    abi::MOUSE_DOWN | abi::MOUSE_UP if event.mouse().1 == abi::MOUSE_LEFT => {
-                        Some(DashboardEvent::Button {
-                            position: event.mouse().0,
-                            down: event.kind == abi::MOUSE_DOWN,
-                        })
-                    }
-                    abi::FOCUS_LEAVE | abi::OVERLAY_HIDDEN => Some(DashboardEvent::Leave),
-                    _ => None,
-                };
-                dashboard_events.extend(input);
-            }
-        }
-        let events = self.controllers.as_ref().unwrap().state().take_events();
-        Frame {
-            toggle: !dashboard && events.toggle,
-            keyboard_presses: if dashboard {
-                Vec::new()
-            } else {
-                events.presses
-            },
-            keyboard_down: if dashboard { [false; 2] } else { events.down },
-            dashboard_visible: dashboard,
-            dashboard_active,
-            dashboard_events,
-            quit: false,
-        }
+        frame
     }
 }
 
 impl Drop for SteamVr {
     fn drop(&mut self) {
-        drop(self.controllers.take());
+        drop(self.worker.take());
         if !self.quitting {
             for handle in self.cursors.into_iter().filter(|&handle| handle != 0) {
                 self.overlay.destroy(handle);
