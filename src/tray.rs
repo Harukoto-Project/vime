@@ -1,3 +1,4 @@
+use crate::single_instance;
 use eframe::{CreationContext, egui::Context};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{cell::Cell, mem::size_of, ptr::null_mut, rc::Rc};
@@ -35,7 +36,9 @@ pub struct Tray(Rc<State>);
 struct State {
     window: Cell<HWND>,
     taskbar_created: u32,
+    open_message: u32,
     context: Context,
+    has_icon: Cell<bool>,
     hidden: Cell<bool>,
     exit_requested: Cell<bool>,
 }
@@ -47,14 +50,18 @@ impl Tray {
         };
         let window = handle.hwnd.get() as HWND;
         let tray = Self::attach(window, creation.egui_ctx.clone(), start_hidden)?;
-        tray.0.add_icon().then_some(tray)
+        tray.0.refresh_icon();
+        single_instance::register_window(window);
+        Some(tray)
     }
 
     fn attach(window: HWND, context: Context, start_hidden: bool) -> Option<Self> {
         let state = Rc::new(State {
             window: Cell::new(window),
             taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
+            open_message: single_instance::open_message(),
             context,
+            has_icon: Cell::new(false),
             hidden: Cell::new(start_hidden),
             exit_requested: Cell::new(false),
         });
@@ -85,6 +92,14 @@ impl Drop for Tray {
 }
 
 impl State {
+    fn refresh_icon(&self) {
+        let added = self.add_icon();
+        self.has_icon.set(added);
+        if !added && self.hidden.get() {
+            self.open();
+        }
+    }
+
     fn icon_data(&self) -> NOTIFYICONDATAW {
         NOTIFYICONDATAW {
             cbSize: size_of::<NOTIFYICONDATAW>() as u32,
@@ -123,6 +138,7 @@ impl State {
         if self.window.replace(null_mut()).is_null() {
             return;
         }
+        single_instance::unregister_window(data.hWnd);
         unsafe {
             Shell_NotifyIconW(NIM_DELETE, &data);
             if RemoveWindowSubclass(data.hWnd, Some(window_proc), SUBCLASS_ID) != 0 {
@@ -204,7 +220,7 @@ unsafe extern "system" fn window_proc(
         Rc::from_raw(reference)
     };
     match message {
-        WM_CLOSE => {
+        WM_CLOSE if state.has_icon.get() => {
             state.hidden.set(true);
             unsafe { ShowWindow(window, SW_HIDE) };
             return 0;
@@ -230,11 +246,10 @@ unsafe extern "system" fn window_proc(
             return 0;
         }
         WM_NCDESTROY => state.detach(reference),
-        message if message != 0 && message == state.taskbar_created && !state.add_icon() => {
-            if state.hidden.get() {
-                state.open();
-            }
-            state.detach(reference);
+        message if message != 0 && message == state.taskbar_created => state.refresh_icon(),
+        message if message != 0 && message == state.open_message => {
+            state.open();
+            return 0;
         }
         _ => {}
     }
@@ -267,6 +282,7 @@ mod tests {
             );
             assert!(!window.is_null());
             let tray = Tray::attach(window, Context::default(), true).unwrap();
+            tray.0.has_icon.set(true);
             let style = || GetWindowLongW(window, GWL_STYLE) as u32;
 
             // eframe's first paint path does both of these through winit.
@@ -282,6 +298,12 @@ mod tests {
             SendMessageW(window, WM_CLOSE, 0, 0);
             assert!(tray.hidden());
             assert_eq!(style() & WS_VISIBLE, 0);
+
+            let open_message = single_instance::open_message();
+            assert_ne!(open_message, 0);
+            SendMessageW(window, open_message, 0, 0);
+            assert!(!tray.hidden());
+            assert_ne!(style() & WS_VISIBLE, 0);
             DestroyWindow(window);
         }
     }

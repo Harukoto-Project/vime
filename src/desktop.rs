@@ -26,7 +26,7 @@ use vime::{
     osc_query::Discovery,
     output,
     settings::{D1Device, Destination, Settings, TypoProvider, TypoSettings},
-    steamvr::{LAUNCH_ARGUMENT, SteamVr, Surface},
+    steamvr::{SteamVr, Surface},
     update::{self, Update},
 };
 
@@ -68,9 +68,8 @@ enum Page {
     Settings,
 }
 
-pub fn run() -> eframe::Result {
+pub fn run(launch_from_steamvr: bool) -> eframe::Result {
     power::disable_throttling();
-    let launch_from_steamvr = env::args_os().any(|arg| arg == LAUNCH_ARGUMENT);
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_inner_size([980., 826.])
