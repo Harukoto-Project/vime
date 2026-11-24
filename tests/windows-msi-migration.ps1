@@ -60,7 +60,10 @@ foreach ($version in '1.0.0', '1.1.0') {
     if ($version -eq '1.1.0') {
         # The old updater applies on exit and leaves the installer for the next launch.
         if (Test-Path -LiteralPath $installed) { throw 'The MSI ran before the next launch.' }
-        Start-Process -FilePath $oldExe -WorkingDirectory $legacy.FullName
+        $relaunch = [Diagnostics.ProcessStartInfo]::new($oldExe)
+        $relaunch.WorkingDirectory = $legacy.FullName
+        $relaunch.UseShellExecute = $false
+        [Diagnostics.Process]::Start($relaunch).Dispose()
     }
 
     $deadline = [DateTime]::UtcNow.AddSeconds(90)
