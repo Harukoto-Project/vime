@@ -18,7 +18,7 @@ use vime::{
 pub use sound::play_click;
 pub use typo::CalibrationJob;
 pub(crate) use typo::typo_reporting_available;
-pub use view::{ASPECT, SIZE, VrKeys, show, show_vr};
+pub use view::{SIZE, VrKeys, show, show_vr};
 
 #[derive(Clone, Debug)]
 pub enum Action {

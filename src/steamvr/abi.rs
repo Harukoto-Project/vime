@@ -135,10 +135,13 @@ table!(Overlay {
     create: 1(key: *const c_char, name: *const c_char, output: *mut u64) -> i32;
     destroy: 2(handle: u64) -> i32;
     flag: 10(handle: u64, flag: i32, enabled: bool) -> i32;
+    sort_order: 19(handle: u64, order: u32) -> i32;
     set_width: 21(handle: u64, width: f32) -> i32;
     set_transform: 32(handle: u64, origin: i32, matrix: *const Matrix) -> i32;
+    set_relative_transform: 39(handle: u64, parent: u64, matrix: *const Matrix) -> i32;
     show: 43(handle: u64) -> i32;
     hide: 44(handle: u64) -> i32;
+    wait_frame_sync: 47(timeout_ms: u32) -> i32;
     poll_event: 48(handle: u64, output: *mut Event, size: u32) -> bool;
     input_method: 50(handle: u64, method: i32) -> i32;
     mouse_scale: 52(handle: u64, scale: *const [f32; 2]) -> i32;
@@ -148,6 +151,11 @@ table!(Overlay {
     dashboard_visible: 68() -> bool;
     dashboard_active: 69(handle: u64) -> bool;
 });
+
+// These tables are immutable. SteamVr joins its controller worker before
+// acknowledging runtime shutdown or releasing the DLL that owns the tables.
+unsafe impl Send for Overlay {}
+unsafe impl Send for Input {}
 
 table!(Input {
     set_manifest: 0(path: *const c_char) -> i32;

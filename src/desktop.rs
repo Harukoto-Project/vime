@@ -23,7 +23,7 @@ use vime::{
     local_d1::{self, Download},
     misconversions, output,
     settings::{D1Device, Destination, Settings, TypoProvider, TypoSettings},
-    steamvr::{Pointer, SteamVr, Surface},
+    steamvr::{SteamVr, Surface},
     update::{self, Update},
 };
 
@@ -90,8 +90,6 @@ struct App {
     world_keys: Option<VrKeys>,
     pending_world_keys: Option<VrKeys>,
     last_world: Option<(u64, Destination, bool)>,
-    pointers: [Option<Pointer>; 2],
-    last_pointers: [Option<Pointer>; 2],
     paint_requested: Option<Instant>,
     dashboard_visible: bool,
     dashboard_revision: Option<(u64, bool)>,
@@ -125,9 +123,8 @@ struct Surfaces {
 
 impl Surfaces {
     fn new(gl: Arc<eframe::glow::Context>, fonts: FontDefinitions) -> Result<Self, String> {
-        let keyboard =
-            OverlaySurface::new(gl.clone(), fonts.clone(), visuals(), keyboard::SIZE, true)?;
-        match OverlaySurface::new(gl, fonts, visuals(), dashboard::SIZE, false) {
+        let keyboard = OverlaySurface::new(gl.clone(), fonts.clone(), visuals(), keyboard::SIZE)?;
+        match OverlaySurface::new(gl, fonts, visuals(), dashboard::SIZE) {
             Ok(dashboard) => Ok(Self {
                 keyboard,
                 dashboard,
@@ -201,8 +198,6 @@ impl App {
             world_keys: None,
             pending_world_keys: None,
             last_world: None,
-            pointers: [None; 2],
-            last_pointers: [None; 2],
             paint_requested: None,
             dashboard_visible: false,
             dashboard_revision: None,
@@ -291,7 +286,7 @@ impl App {
             self.steamvr_message = error.clone();
             return;
         }
-        match SteamVr::connect(&self.directory, dashboard::SIZE) {
+        match SteamVr::connect(&self.directory, keyboard::SIZE, dashboard::SIZE) {
             Ok(vr) => {
                 self.steamvr_message.clear();
                 self.dashboard.reset();
@@ -319,8 +314,6 @@ impl App {
         self.world_keys = None;
         self.pending_world_keys = None;
         self.last_world = None;
-        self.pointers = [None; 2];
-        self.last_pointers = [None; 2];
         self.draw_errors[0] = None;
         self.world_repeaters = Default::default();
     }
@@ -330,8 +323,6 @@ impl App {
         self.world_keys = None;
         self.pending_world_keys = None;
         self.last_world = None;
-        self.pointers = [None; 2];
-        self.last_pointers = [None; 2];
         self.dashboard.reset();
         self.world_repeaters = Default::default();
         self.repeaters[DASHBOARD].release();
@@ -415,20 +406,6 @@ impl App {
                 self.pending_world_keys = Some(surfaces.keyboard.render(Vec::new(), |ui| {
                     keyboard::show_vr(ui, &self.keyboard, self.settings.destination, caret_visible)
                 }));
-            }
-            if keyboard_changed
-                || pointer_changed(&surfaces.keyboard, now, self.last_pointers, self.pointers)
-            {
-                let keys = self
-                    .pending_world_keys
-                    .as_ref()
-                    .or(self.world_keys.as_ref());
-                let pointers = self.pointers.map(|pointer| {
-                    let pointer = pointer?;
-                    Some((keys?.position(pointer.uv), pointer.down))
-                });
-                surfaces.keyboard.compose_pointers(pointers);
-                self.last_pointers = self.pointers;
             }
             if let Some(result) = surfaces
                 .keyboard
@@ -1434,7 +1411,7 @@ impl eframe::App for App {
             self.toggle();
         }
         if let Some(vr) = &mut self.vr {
-            let frame = vr.poll(keyboard::ASPECT);
+            let frame = vr.poll();
             if frame.quit {
                 self.disconnect();
                 self.steamvr_message = tr("SteamVR との接続が終了しました").into();
@@ -1464,15 +1441,12 @@ impl eframe::App for App {
                 if frame.toggle {
                     self.toggle();
                 } else {
-                    self.pointers = frame.pointers.map(|pointer| {
-                        pointer.map(|mut pointer| {
-                            for (axis, pixels) in pointer.uv.iter_mut().zip(keyboard::SIZE) {
-                                *axis = (*axis * pixels as f32).round() / pixels as f32;
-                            }
-                            pointer
-                        })
-                    });
-                    self.world_key_presses(frame.keyboard_presses);
+                    for presses in frame.keyboard_presses {
+                        self.world_key_presses(presses);
+                        if self.world_keys.is_none() {
+                            break;
+                        }
+                    }
                     self.world_key_repeats(frame.keyboard_down);
                 }
             }
@@ -1498,7 +1472,6 @@ impl eframe::App for App {
                         self.settings.destination,
                         caret_visible,
                     ))
-                    || pointer_changed(&surfaces.keyboard, now, self.last_pointers, self.pointers)
                     || self.draw_errors[0].is_some());
             let dashboard_changed = surfaces.dashboard.can_present(now)
                 && (self.dashboard.redraw
@@ -1567,18 +1540,6 @@ impl eframe::App for App {
         }
         self.update.apply_on_exit();
     }
-}
-
-fn pointer_changed(
-    surface: &OverlaySurface,
-    now: Instant,
-    previous: [Option<Pointer>; 2],
-    current: [Option<Pointer>; 2],
-) -> bool {
-    current != previous
-        && (surface.pointer_frame_due(now)
-            || current.map(|pointer| pointer.map(|pointer| pointer.down))
-                != previous.map(|pointer| pointer.map(|pointer| pointer.down)))
 }
 
 fn primary(label: &str) -> Button<'_> {

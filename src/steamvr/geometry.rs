@@ -58,6 +58,14 @@ pub fn hit(panel: &Matrix, aim: &Matrix, width: f32, aspect: f32) -> Option<[f32
     ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some([u, v])
 }
 
+pub fn cursor_transform([u, v]: [f32; 2], width: f32, aspect: f32) -> Matrix {
+    Matrix([
+        [1., 0., 0., (u - 0.5) * width],
+        [0., 1., 0., (0.5 - v) * width / aspect],
+        [0., 0., 1., 0.001],
+    ])
+}
+
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a.into_iter().zip(b).map(|(a, b)| a * b).sum()
 }
@@ -77,5 +85,18 @@ mod tests {
         assert_eq!(hit(&panel, &aim, 1., 2.), Some([0.5, 0.25]));
         aim.0[0][3] += 1.;
         assert_eq!(hit(&panel, &aim, 1., 2.), None);
+    }
+
+    #[test]
+    fn cursor_tracks_keyboard_coordinates_and_width() {
+        let panel = Matrix([[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]]);
+        let aim = Matrix([[1., 0., 0., 0.5], [0., 1., 0., 0.25], [0., 0., 1., 1.]]);
+        for width in [2., 4.] {
+            let uv = hit(&panel, &aim, width, 2.).unwrap();
+            let cursor = cursor_transform(uv, width, 2.);
+            assert_eq!(cursor.0[0][3], aim.0[0][3]);
+            assert_eq!(cursor.0[1][3], aim.0[1][3]);
+            assert!(cursor.0[2][3] > 0.);
+        }
     }
 }

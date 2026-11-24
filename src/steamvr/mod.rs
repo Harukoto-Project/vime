@@ -1,41 +1,31 @@
 mod abi;
 mod actions;
+mod controllers;
 mod geometry;
 
 use crate::{
     brand,
     i18n::{tr, tr_args},
 };
-use abi::{
-    ActionPose, ActionSet, Applications, Digital, Event, Input, Matrix, Overlay, Pose, System,
-    Texture,
-};
+use abi::{Applications, Event, Input, Matrix, Overlay, Pose, System, Texture};
+use controllers::{Actions, ControllerWorker, KeyPresses};
 use libloading::Library;
 use std::{
     ffi::{CStr, CString, c_void},
     path::Path,
     sync::{Mutex, MutexGuard},
-    time::Instant,
 };
 
 type Result<T> = std::result::Result<T, String>;
 static RUNTIME_LOCK: Mutex<()> = Mutex::new(());
 
-#[derive(Clone, Copy, Default, PartialEq)]
-pub struct Pointer {
-    pub uv: [f32; 2],
-    pub down: bool,
-}
-
 #[derive(Default)]
 pub struct Frame {
     pub toggle: bool,
-    pub keyboard_presses: [Option<[f32; 2]>; 2],
+    pub keyboard_presses: Vec<KeyPresses>,
     pub keyboard_down: [bool; 2],
-    pub pointers: [Option<Pointer>; 2],
     pub dashboard_visible: bool,
     pub dashboard_active: bool,
-    pub input_error: Option<i32>,
     pub dashboard_events: Vec<DashboardEvent>,
     pub quit: bool,
 }
@@ -116,26 +106,22 @@ pub struct SteamVr {
     _runtime: Runtime,
     system: System,
     overlay: Overlay,
-    input: Input,
     applications: Applications,
     handle: u64,
     dashboard: u64,
-    pointer_filters: [geometry::PointerFilter; 2],
-    toggle_set: u64,
-    pointer_set: u64,
-    toggle_action: u64,
-    aim_action: u64,
-    click_action: u64,
-    hands: [u64; 2],
+    cursors: [u64; 2],
+    controllers: Option<ControllerWorker>,
     panel: Option<Matrix>,
     world_shown: bool,
-    width: f32,
-    armed: [bool; 2],
     quitting: bool,
 }
 
 impl SteamVr {
-    pub fn connect(directory: &Path, dashboard_size: [u32; 2]) -> Result<Self> {
+    pub fn connect(
+        directory: &Path,
+        keyboard_size: [u32; 2],
+        dashboard_size: [u32; 2],
+    ) -> Result<Self> {
         let runtime = Runtime::connect()?;
         let (app_path, actions_path) =
             actions::write_manifests(directory).map_err(|error| error.to_string())?;
@@ -190,12 +176,14 @@ impl SteamVr {
             Ok::<_, String>(handle)
         };
 
-        let toggle_set = set(actions::TOGGLE_SET)?;
-        let pointer_set = set(actions::POINTER_SET)?;
-        let toggle_action = action(actions::TOGGLE)?;
-        let aim_action = action(actions::AIM)?;
-        let click_action = action(actions::CLICK)?;
-        let hands = [hand(c"/user/hand/left")?, hand(c"/user/hand/right")?];
+        let controller_actions = Actions {
+            toggle_set: set(actions::TOGGLE_SET)?,
+            pointer_set: set(actions::POINTER_SET)?,
+            toggle: action(actions::TOGGLE)?,
+            aim: action(actions::AIM)?,
+            click: action(actions::CLICK)?,
+            hands: [hand(c"/user/hand/left")?, hand(c"/user/hand/right")?],
+        };
 
         let mut handle = 0;
         checked(
@@ -206,26 +194,49 @@ impl SteamVr {
             _runtime: runtime,
             system,
             overlay,
-            input,
             applications,
             handle,
             dashboard: 0,
-            pointer_filters: Default::default(),
-            toggle_set,
-            pointer_set,
-            toggle_action,
-            aim_action,
-            click_action,
-            hands,
+            cursors: [0; 2],
+            controllers: None,
             panel: None,
             world_shown: false,
-            width: 1.08,
-            armed: [false; 2],
             quitting: false,
         };
         session.configure_texture(handle)?;
         session.create_dashboard(dashboard_size)?;
+        session.create_cursors()?;
+        session.controllers = Some(ControllerWorker::start(
+            input,
+            Overlay(session.overlay.0),
+            controller_actions,
+            handle,
+            session.cursors,
+            keyboard_size,
+            1.08,
+        )?);
         Ok(session)
+    }
+
+    fn create_cursors(&mut self) -> Result<()> {
+        for (hand, (handle, key)) in self
+            .cursors
+            .iter_mut()
+            .zip([
+                c"org.harukoto.vime.pointer.left",
+                c"org.harukoto.vime.pointer.right",
+            ])
+            .enumerate()
+        {
+            let operation = tr("VRキーボードを描画");
+            checked(
+                self.overlay
+                    .create(key.as_ptr(), c"ViME Pointer".as_ptr(), handle),
+                operation,
+            )?;
+            controllers::configure_cursor(&self.overlay, *handle, hand, operation)?;
+        }
+        Ok(())
     }
 
     fn create_dashboard(&mut self, size: [u32; 2]) -> Result<()> {
@@ -272,8 +283,11 @@ impl SteamVr {
 
     pub fn open_bindings(&self, desktop: bool) -> Result<()> {
         checked(
-            self.input
-                .open_bindings(actions::APP_KEY.as_ptr(), self.toggle_set, 0, desktop),
+            self.controllers
+                .as_ref()
+                .unwrap()
+                .state()
+                .open_bindings(desktop),
             tr("SteamVR バインド画面を開く"),
         )
     }
@@ -300,7 +314,6 @@ impl SteamVr {
             tr("VRキーボードを配置"),
         )?;
         self.panel = Some(panel);
-        self.armed = [false; 2];
         Ok(())
     }
 
@@ -309,7 +322,7 @@ impl SteamVr {
             self.overlay.set_width(self.handle, width),
             tr("VRキーボードの幅を変更"),
         )?;
-        self.width = width;
+        self.controllers.as_ref().unwrap().state().set_width(width);
         Ok(())
     }
 
@@ -319,7 +332,7 @@ impl SteamVr {
             self.world_shown = false;
         }
         self.panel = None;
-        self.clear_pointers();
+        self.controllers.as_ref().unwrap().state().set_panel(None);
         Ok(())
     }
 
@@ -344,11 +357,14 @@ impl SteamVr {
         if matches!(surface, Surface::Keyboard) && self.visible() && !self.world_shown {
             checked(self.overlay.show(handle), tr("VRキーボードを表示"))?;
             self.world_shown = true;
+            let controllers = self.controllers.as_ref().unwrap();
+            controllers.state().set_panel(self.panel);
+            controllers.wake();
         }
         Ok(())
     }
 
-    pub fn poll(&mut self, aspect: f32) -> Frame {
+    pub fn poll(&mut self) -> Frame {
         let mut event = Event::default();
         for _ in 0..64 {
             if !self
@@ -358,6 +374,7 @@ impl SteamVr {
                 break;
             }
             if event.kind == abi::QUIT {
+                drop(self.controllers.take());
                 self.system.acknowledge_quit();
                 self.quitting = true;
                 return Frame {
@@ -392,101 +409,30 @@ impl SteamVr {
                 dashboard_events.extend(input);
             }
         }
-        let pointing = self.world_shown && !dashboard;
-        let mut frame = Frame {
+        let events = self.controllers.as_ref().unwrap().state().take_events();
+        Frame {
+            toggle: !dashboard && events.toggle,
+            keyboard_presses: if dashboard {
+                Vec::new()
+            } else {
+                events.presses
+            },
+            keyboard_down: if dashboard { [false; 2] } else { events.down },
             dashboard_visible: dashboard,
             dashboard_active,
             dashboard_events,
-            ..Frame::default()
-        };
-        let mut sets = [ActionSet::default(), ActionSet::default()];
-        sets[0].set = self.toggle_set;
-        sets[0].priority = 1;
-        sets[1].set = self.pointer_set;
-        sets[1].priority = 20;
-        let input_error = self.input.update(
-            sets.as_ptr(),
-            size_of::<ActionSet>() as u32,
-            if pointing { 2 } else { 1 },
-        );
-        if input_error != 0 {
-            frame.input_error = Some(input_error);
-            self.clear_pointers();
-            return frame;
+            quit: false,
         }
-
-        let toggle = !dashboard
-            && self
-                .digital(self.toggle_action, 0)
-                .is_some_and(|data| data.state && data.changed);
-        if let Some(panel) = self.panel.filter(|_| pointing) {
-            let now = Instant::now();
-            for hand in 0..2 {
-                let click = self.digital(self.click_action, self.hands[hand]);
-                let down = click.as_ref().is_some_and(|data| data.state);
-                let pressed = self.armed[hand] && down;
-                self.armed[hand] = click.is_some_and(|data| !data.state);
-                frame.keyboard_down[hand] = down;
-                if let Some(uv) = self.pointer_position(hand, &panel, aspect, now) {
-                    frame.pointers[hand] = Some(Pointer { uv, down });
-                    frame.keyboard_presses[hand] = pressed.then_some(uv);
-                }
-            }
-        } else {
-            self.clear_pointers();
-        }
-        frame.toggle = toggle;
-        frame
-    }
-
-    fn pointer_position(
-        &mut self,
-        hand: usize,
-        panel: &Matrix,
-        aspect: f32,
-        now: Instant,
-    ) -> Option<[f32; 2]> {
-        let source = self.hands[hand];
-
-        let mut pose = ActionPose::default();
-        let code = self.input.aim(
-            self.aim_action,
-            abi::STANDING,
-            0.0,
-            &mut pose,
-            size_of::<ActionPose>() as u32,
-            source,
-        );
-        if code != 0 || !pose.active || !pose.pose.valid {
-            self.pointer_filters[hand].reset();
-            return None;
-        }
-        let Some(uv) = geometry::hit(panel, &pose.pose.transform, self.width, aspect) else {
-            self.pointer_filters[hand].reset();
-            return None;
-        };
-        Some(self.pointer_filters[hand].update(uv, now, aspect))
-    }
-
-    fn clear_pointers(&mut self) {
-        self.armed = [false; 2];
-        for filter in &mut self.pointer_filters {
-            filter.reset();
-        }
-    }
-
-    fn digital(&self, action: u64, device: u64) -> Option<Digital> {
-        let mut data = Digital::default();
-        let code = self
-            .input
-            .digital(action, &mut data, size_of::<Digital>() as u32, device);
-        (code == 0 && data.active).then_some(data)
     }
 }
 
 impl Drop for SteamVr {
     fn drop(&mut self) {
+        drop(self.controllers.take());
         if !self.quitting {
+            for handle in self.cursors.into_iter().filter(|&handle| handle != 0) {
+                self.overlay.destroy(handle);
+            }
             if self.dashboard != 0 {
                 self.overlay.destroy(self.dashboard);
             }
