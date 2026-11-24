@@ -60,6 +60,27 @@ impl CancellableClient {
             .map(|_| ())
     }
 
+    /// Like [`Self::new`], for responses that stream for a long time: a model
+    /// may need a while to load before it produces the first byte.
+    pub fn streaming(loopback: bool) -> io::Result<Self> {
+        let client = Self::new(loopback)?;
+        checked(unsafe { WinHttpSetTimeouts(client.0.0, 5_000, 5_000, 30_000, 120_000) })?;
+        Ok(client)
+    }
+
+    /// Posts JSON and hands the response body to `consume` as it arrives.
+    pub fn post_stream(
+        &self,
+        url: &str,
+        key: &str,
+        body: &Value,
+        deadline: Instant,
+        cancelled: impl Fn() -> bool,
+        consume: impl FnMut(&[u8]) -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.exchange(url, key, body, deadline, cancelled, true, consume)
+    }
+
     fn post_inner(
         &self,
         url: &str,
@@ -69,6 +90,40 @@ impl CancellableClient {
         cancelled: impl Fn() -> bool,
         read_response: bool,
     ) -> io::Result<Value> {
+        let mut response = Vec::new();
+        self.exchange(
+            url,
+            key,
+            body,
+            deadline,
+            cancelled,
+            read_response,
+            |chunk| {
+                if response.len() + chunk.len() > MAX_RESPONSE {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
+                response.extend_from_slice(chunk);
+                Ok(())
+            },
+        )?;
+        if read_response {
+            Ok(serde_json::from_slice(&response)?)
+        } else {
+            Ok(Value::Null)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn exchange(
+        &self,
+        url: &str,
+        key: &str,
+        body: &Value,
+        deadline: Instant,
+        cancelled: impl Fn() -> bool,
+        read_response: bool,
+        mut consume: impl FnMut(&[u8]) -> io::Result<()>,
+    ) -> io::Result<()> {
         valid_time(deadline, &cancelled)?;
         let endpoint = Endpoint::parse(url).ok_or(io::ErrorKind::InvalidInput)?;
         if key.chars().any(char::is_control) {
@@ -99,6 +154,7 @@ impl CancellableClient {
                     | WINHTTP_CALLBACK_FLAG_REQUEST_ERROR
                     | WINHTTP_CALLBACK_FLAG_SENDREQUEST_COMPLETE
                     | WINHTTP_CALLBACK_FLAG_HEADERS_AVAILABLE
+                    | WINHTTP_CALLBACK_FLAG_DATA_AVAILABLE
                     | WINHTTP_CALLBACK_FLAG_READ_COMPLETE,
                 0,
             );
@@ -144,16 +200,33 @@ impl CancellableClient {
         }
         request.require_success()?;
         if !read_response {
-            return Ok(Value::Null);
+            return Ok(());
         }
-        let mut response = Vec::new();
         loop {
+            valid_time(deadline, &cancelled)?;
+            // A read alone may wait for its whole buffer to fill, which would
+            // hold back a streamed answer; asking what is available first
+            // returns as soon as any data has arrived.
+            unsafe { started(WinHttpQueryDataAvailable(handle, null_mut()))? };
+            let available = wait(
+                &events,
+                deadline,
+                &cancelled,
+                WINHTTP_CALLBACK_STATUS_DATA_AVAILABLE,
+            )?;
+            let available = available
+                .try_into()
+                .map(u32::from_le_bytes)
+                .map_err(|_| io::ErrorKind::InvalidData)?;
+            if available == 0 {
+                return Ok(());
+            }
             valid_time(deadline, &cancelled)?;
             unsafe {
                 started(WinHttpReadData(
                     handle,
                     (*state).read.get().cast(),
-                    8192,
+                    available.min(8192),
                     null_mut(),
                 ))?;
             }
@@ -164,12 +237,9 @@ impl CancellableClient {
                 WINHTTP_CALLBACK_STATUS_READ_COMPLETE,
             )?;
             if chunk.is_empty() {
-                return Ok(serde_json::from_slice(&response)?);
+                return Ok(());
             }
-            if response.len() + chunk.len() > MAX_RESPONSE {
-                return Err(io::ErrorKind::InvalidData.into());
-            }
-            response.extend(chunk);
+            consume(&chunk)?;
         }
     }
 }
@@ -206,6 +276,13 @@ unsafe extern "system" fn on_status(
             if size as usize >= size_of::<WINHTTP_ASYNC_RESULT>() =>
         {
             Event::Error(unsafe { data.cast::<WINHTTP_ASYNC_RESULT>().read_unaligned() }.dwError)
+        }
+        // The status information is the number of bytes that can be read.
+        WINHTTP_CALLBACK_STATUS_DATA_AVAILABLE if size as usize >= size_of::<u32>() => {
+            Event::Complete(
+                status,
+                unsafe { data.cast::<u32>().read_unaligned() }.to_le_bytes().to_vec(),
+            )
         }
         WINHTTP_CALLBACK_STATUS_READ_COMPLETE if size > 0 => Event::Complete(
             status,

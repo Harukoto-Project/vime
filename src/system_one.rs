@@ -22,7 +22,10 @@ struct Endpoint {
 
 impl Endpoint {
     fn parse(url: &str) -> Option<Self> {
-        if url.len() > 2048
+        // A zero length makes WinHTTP read a null-terminated string, which an
+        // empty vector's dangling pointer is not.
+        if url.is_empty()
+            || url.len() > 2048
             || url.contains(['#', '\\'])
             || url.chars().any(char::is_whitespace)
             || url.chars().any(char::is_control)

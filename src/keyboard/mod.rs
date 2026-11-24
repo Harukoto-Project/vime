@@ -3,6 +3,7 @@ mod microsoft_ime;
 pub(crate) mod palette;
 mod sound;
 mod spellcheck;
+mod translate;
 mod typo;
 mod view;
 
@@ -11,11 +12,12 @@ use std::{
     path::Path,
     time::{Duration, Instant},
 };
+use translate::Translator;
 use typo::{Snapshot, Typo};
 use vime::{
     i18n::tr,
     ime::{Composer, Language},
-    settings::{TypoProvider, TypoSettings},
+    settings::{TranslationSettings, TypoProvider, TypoSettings},
 };
 
 pub use sound::play_click;
@@ -47,6 +49,10 @@ pub enum Action {
     Enter,
     Close,
     ToggleTheme,
+    /// Puts the translation shown above the editor into the editor.
+    AcceptTranslation,
+    /// Switches to the next language the text is translated into.
+    CycleTranslationTarget,
 }
 
 impl Action {
@@ -139,6 +145,7 @@ pub struct Keyboard {
     clauses: Option<(String, Vec<Clause>)>,
     ime: Lookup,
     typo: Option<Typo>,
+    translator: Option<Translator>,
     context: eframe::egui::Context,
 }
 
@@ -161,8 +168,31 @@ impl Keyboard {
             clauses: None,
             ime: Lookup::start(context.clone()),
             typo: None,
+            translator: None,
             context,
         }
+    }
+
+    /// Applies the translation settings. The key is read here because it is
+    /// protected for this Windows user.
+    pub fn configure_translation(&mut self, settings: &TranslationSettings) {
+        if settings.enabled && self.translator.is_none() {
+            self.translator = Some(Translator::start(self.context.clone()));
+        }
+        let Some(translator) = &mut self.translator else {
+            return;
+        };
+        let was_shown = translator.enabled();
+        translator.configure(settings, settings.api_key().unwrap_or_default());
+        translator.changed(&self.composer.text());
+        if was_shown || translator.enabled() {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    /// The translation to show above the editor, if translation is on.
+    pub fn translation(&self) -> Option<&Translator> {
+        self.translator.as_ref().filter(|translator| translator.enabled())
     }
 
     pub fn configure_typo(
@@ -230,6 +260,9 @@ impl Keyboard {
         if let Some(typo) = &mut self.typo {
             typo.reset();
         }
+        if let Some(translator) = &mut self.translator {
+            translator.reset();
+        }
         self.composer.clear();
         self.candidates.clear();
         self.candidate_selected = None;
@@ -292,6 +325,7 @@ impl Keyboard {
         let typing = matches!(action, Action::Key(key) if key.is_alphanumeric() || matches!(key, '\'' | '’'));
         let character =
             matches!(action, Action::Key(_)) && self.composer.text().chars().count() < INPUT_LIMIT;
+        let text_before = self.translation().map(|_| self.composer.text());
         let snapshot = (editing && self.typo.as_ref().is_some_and(Typo::enabled))
             .then(|| Snapshot::of(&self.composer));
         if snapshot.is_some() && !deleting && !typing && !matches!(action, Action::CorrectTypo(_)) {
@@ -351,6 +385,16 @@ impl Keyboard {
                 self.candidate_page = (self.candidate_page + 1) % pages;
             }
             Action::Clear => self.clear(),
+            Action::AcceptTranslation => {
+                if let Some(translation) = self.translation().and_then(Translator::candidate) {
+                    let translation: String = translation.chars().take(INPUT_LIMIT).collect();
+                    self.clear();
+                    self.composer.insert(&translation);
+                    if let Some(translator) = &mut self.translator {
+                        translator.accepted(&translation);
+                    }
+                }
+            }
             Action::Key(_)
             | Action::Insert(_)
             | Action::Space
@@ -359,7 +403,16 @@ impl Keyboard {
             | Action::Send
             | Action::Enter
             | Action::Close
-            | Action::ToggleTheme => {}
+            | Action::ToggleTheme
+            | Action::CycleTranslationTarget => {}
+        }
+        if let Some(before) = text_before {
+            let after = self.composer.text();
+            if after != before
+                && let Some(translator) = &mut self.translator
+            {
+                translator.changed(&after);
+            }
         }
         if let Some(snapshot) = snapshot
             && let Some(typo) = &mut self.typo
@@ -458,6 +511,11 @@ impl Keyboard {
             && typo.poll(&self.composer)
         {
             self.candidate_page = 0;
+            self.revision = self.revision.wrapping_add(1);
+        }
+        if let Some(translator) = &mut self.translator
+            && translator.poll()
+        {
             self.revision = self.revision.wrapping_add(1);
         }
         let Some((reading, clauses)) = self.ime.latest() else {

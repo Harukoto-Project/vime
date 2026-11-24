@@ -147,6 +147,22 @@ API キーを入力	Enter API key	API 키 입력
 保存済み（変更する場合は入力）	Saved (enter to replace)	저장됨(변경 시 입력)
 保存済みのキーを削除	Remove saved key	저장된 키 삭제
 API キーを保護できませんでした ({0})	Could not protect the API key ({0})	API 키를 보호할 수 없습니다 ({0})
+翻訳	Translation	번역
+入力欄の上に翻訳を表示する	Show a translation above the input box	입력란 위에 번역 표시
+OpenAI 互換 API の URL	OpenAI-compatible API URL	OpenAI 호환 API URL
+翻訳先	Translate to	번역 언어
+入力が止まってから翻訳するまで	Wait after typing stops	입력이 멈춘 뒤 번역까지 대기
+API キー（任意）	API key (optional)	API 키(선택 사항)
+入力したテキストの全文が設定先へ送信されます。翻訳元の言語は自動で判定されます。	The full text you type is sent to this server. The source language is detected automatically.	입력한 텍스트 전체가 설정한 서버로 전송됩니다. 원본 언어는 자동으로 감지됩니다.
+翻訳先の API URL を入力してください	Enter the translation API URL	번역 API URL을 입력하세요
+翻訳を入力欄に反映	Use the translation as the message	번역을 입력란에 반영
+翻訳先を切り替え	Switch the translation language	번역 언어 전환
+翻訳中…	Translating…	번역 중…
+入力すると翻訳が表示されます	The translation appears as you type	입력하면 번역이 표시됩니다
+翻訳を開始できません	Could not start the translation	번역을 시작할 수 없습니다
+翻訳が空でした	The translation was empty	번역 결과가 비어 있습니다
+翻訳の入力待ち時間が範囲外です	The translation delay is out of range	번역 대기 시간이 범위를 벗어났습니다
+翻訳 API の HTTP または HTTPS URL を入力してください	Enter an HTTP or HTTPS URL for the translation API	번역 API의 HTTP 또는 HTTPS URL을 입력하세요
 GPU（CUDA）	GPU (CUDA)	GPU(CUDA)
 CUDA 推論を開始できません。対応する NVIDIA GPU、ドライバー、空き VRAM を確認してください	Could not start CUDA inference. Check the NVIDIA GPU, driver, and available VRAM.	CUDA 추론을 시작할 수 없습니다. 지원되는 NVIDIA GPU, 드라이버, 사용 가능한 VRAM을 확인하세요.
 推論エンジンをダウンロード（約 {0} MB）	Download inference engine (about {0} MB)	추론 엔진 다운로드(약 {0} MB)

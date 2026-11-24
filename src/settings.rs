@@ -127,6 +127,99 @@ mod tests {
     }
 
     #[test]
+    fn translation_is_off_by_default_and_old_settings_still_load() {
+        let previous: Settings = serde_json::from_str(r#"{"osc_port":9100}"#).unwrap();
+        assert!(!previous.translation.enabled);
+        assert_eq!(previous.translation.target, TranslationTarget::English);
+        assert_eq!(previous.translation.delay_ms, 800);
+        assert!(Settings::default().validate().is_ok());
+    }
+
+    #[test]
+    fn translation_endpoint_accepts_a_base_url_a_bare_host_or_the_full_path() {
+        let endpoint = |url: &str| {
+            TranslationSettings {
+                url: url.into(),
+                ..Default::default()
+            }
+            .endpoint()
+        };
+        assert_eq!(endpoint(""), "");
+        assert_eq!(
+            endpoint("http://127.0.0.1:1234/v1"),
+            "http://127.0.0.1:1234/v1/chat/completions"
+        );
+        assert_eq!(
+            endpoint(" http://127.0.0.1:1234/v1/ "),
+            "http://127.0.0.1:1234/v1/chat/completions"
+        );
+        assert_eq!(
+            endpoint("http://localhost:11434"),
+            "http://localhost:11434/v1/chat/completions"
+        );
+        assert_eq!(
+            endpoint("https://example.test/api/chat/completions"),
+            "https://example.test/api/chat/completions"
+        );
+    }
+
+    #[test]
+    fn the_translation_target_cycles_through_every_language() {
+        let mut target = TranslationTarget::default();
+        for expected in TranslationTarget::ALL.into_iter().skip(1) {
+            target = target.next();
+            assert_eq!(target, expected);
+        }
+        assert_eq!(target.next(), TranslationTarget::default());
+        assert_eq!(TranslationTarget::ALL.len(), 3);
+    }
+
+    #[test]
+    fn a_translation_language_that_is_no_longer_offered_falls_back() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"translation":{"target":"spanish"}}"#).unwrap();
+        assert_eq!(settings.translation.target, TranslationTarget::English);
+        let settings: Settings =
+            serde_json::from_str(r#"{"translation":{"target":"korean"}}"#).unwrap();
+        assert_eq!(settings.translation.target, TranslationTarget::Korean);
+    }
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn enabled_translation_needs_a_valid_url_and_keeps_its_key_protected() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut settings = Settings::default();
+        settings.translation.enabled = true;
+        assert!(settings.save(directory.path()).is_err());
+        settings.translation.url = "http://127.0.0.1:1234/v1".into();
+        settings.translation.target = TranslationTarget::Japanese;
+        let key = "synthetic-translation-key";
+        let scope = settings.translation.api_key_scope().unwrap();
+        settings.translation.protected_api_keys.insert(
+            scope.clone(),
+            crate::credentials::protect(key, &scope).unwrap(),
+        );
+        settings.save(directory.path()).unwrap();
+        assert!(
+            !fs::read_to_string(directory.path().join("settings.json"))
+                .unwrap()
+                .contains(key)
+        );
+        let mut loaded = Settings::load(directory.path()).unwrap();
+        assert_eq!(loaded.translation.target, TranslationTarget::Japanese);
+        assert_eq!(loaded.translation.api_key().unwrap(), key);
+        loaded.translation.url = "http://127.0.0.1:1235/v1".into();
+        assert!(
+            !loaded
+                .translation
+                .protected_api_keys
+                .contains_key(&loaded.translation.api_key_scope().unwrap())
+        );
+        loaded.translation.delay_ms = 10;
+        assert!(loaded.save(directory.path()).is_err());
+    }
+
+    #[test]
     fn persists_distinct_server_cpu_and_gpu_limits() {
         let directory = tempfile::tempdir().unwrap();
         let mut settings = Settings::default();
@@ -305,6 +398,133 @@ impl TypoSettings {
     }
 }
 
+/// A language the typed text can be translated into. The source language is
+/// always detected by the model.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranslationTarget {
+    #[default]
+    English,
+    Japanese,
+    Korean,
+}
+
+impl<'de> Deserialize<'de> for TranslationTarget {
+    /// A language that is no longer offered falls back to the default.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match String::deserialize(deserializer)?.as_str() {
+            "japanese" => Self::Japanese,
+            "korean" => Self::Korean,
+            _ => Self::English,
+        })
+    }
+}
+
+impl TranslationTarget {
+    pub const ALL: [Self; 3] = [Self::English, Self::Japanese, Self::Korean];
+
+    /// The language's own name, which fits on the keyboard's button.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::English => "English",
+            Self::Japanese => "日本語",
+            Self::Korean => "한국어",
+        }
+    }
+
+    /// The ISO 639-1 code, for models that take one.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::English => "en",
+            Self::Japanese => "ja",
+            Self::Korean => "ko",
+        }
+    }
+
+    /// The name used in the instruction to the model.
+    pub fn prompt_name(self) -> &'static str {
+        match self {
+            Self::English => "English",
+            Self::Japanese => "Japanese",
+            Self::Korean => "Korean",
+        }
+    }
+    /// The target the keyboard's button switches to.
+    pub fn next(self) -> Self {
+        let index = Self::ALL.iter().position(|target| *target == self);
+        Self::ALL[index.map_or(0, |index| (index + 1) % Self::ALL.len())]
+    }
+}
+
+pub const MIN_TRANSLATION_DELAY_MS: u64 = 200;
+pub const MAX_TRANSLATION_DELAY_MS: u64 = 5000;
+
+/// Translation of the typed text by any OpenAI-compatible chat server, such as
+/// a local LLM.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TranslationSettings {
+    pub enabled: bool,
+    /// The API base URL such as `http://127.0.0.1:1234/v1`.
+    pub url: String,
+    pub model: String,
+    pub target: TranslationTarget,
+    /// How long typing must pause before the text is translated.
+    pub delay_ms: u64,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub protected_api_keys: BTreeMap<String, String>,
+}
+
+impl Default for TranslationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: String::new(),
+            model: String::new(),
+            target: TranslationTarget::default(),
+            delay_ms: 800,
+            protected_api_keys: BTreeMap::new(),
+        }
+    }
+}
+
+impl TranslationSettings {
+    /// The chat completions URL for the configured base URL. A bare host and
+    /// port is taken to serve the usual `/v1` API.
+    pub fn endpoint(&self) -> String {
+        let base = self.url.trim().trim_end_matches('/');
+        if base.is_empty() {
+            return String::new();
+        }
+        if base.ends_with("/chat/completions") {
+            return base.to_owned();
+        }
+        let bare = base
+            .split_once("://")
+            .is_some_and(|(_, rest)| !rest.contains('/'));
+        format!("{base}{}/chat/completions", if bare { "/v1" } else { "" })
+    }
+
+    pub fn key_variable(&self) -> &'static str {
+        "VIME_TRANSLATE_API_KEY"
+    }
+
+    pub fn api_key_scope(&self) -> Option<String> {
+        let endpoint = self.endpoint();
+        (!endpoint.is_empty()).then(|| format!("{}:{endpoint}", self.key_variable()))
+    }
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    pub fn api_key(&self) -> io::Result<String> {
+        if let Some(scope) = self.api_key_scope()
+            && let Some(protected) = self.protected_api_keys.get(&scope)
+        {
+            return crate::credentials::unprotect(protected, &scope);
+        }
+        Ok(env::var(self.key_variable()).unwrap_or_default())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyboardTheme {
@@ -345,6 +565,7 @@ pub struct Settings {
     pub language: Lang,
     pub typo: TypoSettings,
     pub report_typos: bool,
+    pub translation: TranslationSettings,
 }
 
 impl Default for Settings {
@@ -360,6 +581,7 @@ impl Default for Settings {
             keyboard_theme: KeyboardTheme::default(),
             typo: TypoSettings::default(),
             report_typos: true,
+            translation: TranslationSettings::default(),
         }
     }
 }
@@ -415,6 +637,20 @@ impl Settings {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 tr("System One の HTTP または HTTPS URL を入力してください"),
+            ));
+        }
+        let translation = &self.translation;
+        if !(MIN_TRANSLATION_DELAY_MS..=MAX_TRANSLATION_DELAY_MS).contains(&translation.delay_ms) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                tr("翻訳の入力待ち時間が範囲外です"),
+            ));
+        }
+        #[cfg(all(windows, target_arch = "x86_64"))]
+        if translation.enabled && !crate::system_one::valid_url(&translation.endpoint()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                tr("翻訳 API の HTTP または HTTPS URL を入力してください"),
             ));
         }
         Ok(())

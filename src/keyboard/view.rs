@@ -1,4 +1,4 @@
-use super::{Action, Keyboard, icons::Icon, palette::Palette};
+use super::{Action, Keyboard, icons::Icon, palette::Palette, translate::Phase};
 use eframe::egui::text::{CCursor, Galley};
 use eframe::egui::{
     self, Align, Align2, Color32, FontId, Mesh, Pos2, Rect, Sense, Shape, Stroke, StrokeKind,
@@ -13,8 +13,15 @@ use vime::{
     steamvr::{KeyFeedback, KeyboardTargets},
 };
 
-pub const SIZE: [u32; 2] = [860, 424];
-pub const ASPECT: f32 = SIZE[0] as f32 / SIZE[1] as f32;
+/// The size of the keyboard with the translation strip above the editor. Without
+/// the strip everything sits `STRIP` higher and the bottom of the surface is
+/// left transparent.
+pub const SIZE: [u32; 2] = [860, 472];
+const STRIP: f32 = 48.;
+
+fn height(translating: bool) -> f32 {
+    SIZE[1] as f32 - if translating { 0. } else { STRIP }
+}
 pub const EMOJI_PAGE_SIZE: usize = 40;
 pub const CANDIDATE_PAGE_SIZE: usize = 7;
 /// Fewer candidates fit next to the clause arrows while converting.
@@ -97,7 +104,18 @@ fn draw(
     caret_visible: bool,
 ) -> (Interaction, VrKeys) {
     let controller_input = feedback.is_some();
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, width / ASPECT), Sense::hover());
+    let translating = keyboard.translation().is_some();
+    // The VR surface is always drawn in full, so that pointer positions map to
+    // the same keys whether or not the strip is shown.
+    let units = if controller_input {
+        SIZE[1] as f32
+    } else {
+        height(translating)
+    };
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(width, width * units / SIZE[0] as f32),
+        Sense::hover(),
+    );
     let scale = rect.width() / SIZE[0] as f32;
     let hold_id = response.id.with("repeat_hold");
     let (keep_hold, start_hold) = ui.input(|input| {
@@ -123,9 +141,14 @@ fn draw(
         palette: Palette::for_theme(theme),
         keys: Vec::new(),
         editor: None,
+        shift: 0.,
     };
-    view.background();
+    let shift = if translating { STRIP } else { 0. };
+    view.background(shift);
     view.header(keyboard, controller_input);
+    // Everything below the header makes room for the translation strip.
+    view.shift = shift;
+    view.translation(keyboard);
     view.editor(keyboard, destination, caret_visible);
     view.candidates(keyboard);
     if keyboard.emoji {
@@ -168,6 +191,8 @@ struct Board<'a> {
     palette: &'static Palette,
     keys: Vec<(Rect, Action)>,
     editor: Option<EditorHit>,
+    /// How far down the content below the header is moved, in logical units.
+    shift: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -182,16 +207,22 @@ enum Face {
 }
 
 impl Board<'_> {
+    /// A box positioned as in the keyboard without the translation strip.
     fn box_at(&self, x: f32, y: f32, width: f32, height: f32) -> Rect {
+        self.box_abs(x, y + self.shift, width, height)
+    }
+
+    /// A box positioned from the top of the keyboard.
+    fn box_abs(&self, x: f32, y: f32, width: f32, height: f32) -> Rect {
         Rect::from_min_size(
             self.rect.min + Vec2::new(x, y) * self.scale,
             Vec2::new(width, height) * self.scale,
         )
     }
 
-    fn background(&self) {
+    fn background(&self, shift: f32) {
         self.ui.painter().rect(
-            self.box_at(4., 4., 852., 416.),
+            self.box_abs(4., 4., 852., 416. + shift),
             24. * self.scale,
             self.palette.panel,
             Stroke::new(self.scale, self.palette.border),
@@ -290,6 +321,75 @@ impl Board<'_> {
             painter.circle_filled(center, 9. * unit, ink);
             painter.circle_filled(center + Vec2::new(5., -4.) * unit, 8. * unit, fill);
         }
+    }
+
+    /// The translation above the editor, which is put into the editor when
+    /// pressed, and the button that switches the language it is translated to.
+    fn translation(&mut self, keyboard: &Keyboard) {
+        const TOP: f32 = 63.;
+        const HEIGHT: f32 = 48.;
+        let Some(translator) = keyboard.translation() else {
+            return;
+        };
+        let text = translator.text();
+        let phase = translator.phase();
+        let ready = !text.trim().is_empty();
+
+        let rect = self.box_abs(22., TOP, 616., HEIGHT);
+        let face = if ready { Face::Selected } else { Face::Disabled };
+        let ink = self.button_face(
+            rect,
+            tr("翻訳を入力欄に反映"),
+            face,
+            Action::AcceptTranslation,
+        );
+        let (message, color) = match phase {
+            Phase::Failed(error) => (error.as_str(), self.palette.error),
+            _ if ready => (text, ink),
+            Phase::Waiting | Phase::Working => (tr("翻訳中…"), self.palette.secondary),
+            _ => (
+                tr("入力すると翻訳が表示されます"),
+                self.palette.secondary,
+            ),
+        };
+        let mut job = LayoutJob::simple(
+            message.to_owned(),
+            FontId::proportional(17. * self.scale),
+            color,
+            rect.width() - 28. * self.scale,
+        );
+        job.wrap.max_rows = 2;
+        job.wrap.break_anywhere = true;
+        job.wrap.overflow_character = Some('…');
+        let painter = self.ui.painter().with_clip_rect(rect);
+        let galley = painter.layout_job(job);
+        let origin = Pos2::new(
+            rect.left() + 14. * self.scale,
+            rect.center().y - galley.size().y / 2.,
+        );
+        painter.galley(origin, galley, color);
+
+        let button = self.box_abs(650., TOP, 188., HEIGHT);
+        let ink = self.button_face(
+            button,
+            tr("翻訳先を切り替え"),
+            Face::Key,
+            Action::CycleTranslationTarget,
+        );
+        self.label(
+            self.box_abs(654., TOP + 5., 180., 14.),
+            Align2::CENTER_CENTER,
+            tr("翻訳先"),
+            11.,
+            self.palette.secondary,
+        );
+        self.label(
+            self.box_abs(654., TOP + 19., 180., 24.),
+            Align2::CENTER_CENTER,
+            translator.target().label(),
+            17.,
+            ink,
+        );
     }
 
     fn editor(&mut self, keyboard: &Keyboard, destination: Destination, caret_visible: bool) {
@@ -984,6 +1084,8 @@ impl Board<'_> {
                     | Action::Clear
                     | Action::Candidate(_)
                     | Action::CorrectTypo(_)
+                    | Action::AcceptTranslation
+                    | Action::CycleTranslationTarget
             ) {
                 response.clone().on_hover_text(label);
             }
@@ -1274,6 +1376,36 @@ mod tests {
             assert_eq!(count, CANDIDATE_PAGE_SIZE);
         });
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn the_translation_strip_moves_the_editor_down_and_offers_the_language_switch() {
+        let context = egui::Context::default();
+        let mut keyboard = Keyboard::new(context.clone());
+        let send_top = |keyboard: &Keyboard| {
+            let mut found = None;
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                let keys = show_vr(ui, keyboard, Destination::Osc, KeyboardTheme::Dark, Default::default(), true);
+                found = Some((
+                    keys.keys.iter().find(|(_, action)| matches!(action, Action::Send)).map(|(rect, _)| rect.top() - keys.rect.top()),
+                    keys.keys.iter().any(|(_, action)| matches!(action, Action::CycleTranslationTarget)),
+                ));
+            });
+            output.textures_delta.clear();
+            found.unwrap()
+        };
+        keyboard.apply(Action::Key('a'));
+        let (plain, switch) = send_top(&keyboard);
+        assert!(!switch);
+        keyboard.configure_translation(&vime::settings::TranslationSettings {
+            enabled: true,
+            url: "http://127.0.0.1:1/v1".into(),
+            ..Default::default()
+        });
+        let (shifted, switch) = send_top(&keyboard);
+        assert!(switch);
+        // The surface is laid out at its logical size, one point per unit.
+        assert!((shifted.unwrap() - plain.unwrap() - STRIP).abs() < 1.);
     }
 
     #[test]

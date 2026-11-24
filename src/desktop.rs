@@ -26,7 +26,10 @@ use vime::{
     misconversions,
     osc_query::Discovery,
     output,
-    settings::{D1Device, Destination, KeyboardTheme, Settings, TypoProvider, TypoSettings},
+    settings::{
+        D1Device, Destination, KeyboardTheme, MAX_TRANSLATION_DELAY_MS, MIN_TRANSLATION_DELAY_MS,
+        Settings, TranslationTarget, TypoProvider, TypoSettings,
+    },
     steamvr::{KeyFeedback, SteamVr, Surface},
     update::{self, Update},
 };
@@ -114,6 +117,8 @@ struct App {
     update: Update,
     api_key_edits: HashMap<String, Option<String>>,
     api_key_before_url: Option<(TypoProvider, String)>,
+    /// A translation API key being edited: `Some(None)` removes the saved key.
+    translation_key_edit: Option<Option<String>>,
     model_download: Option<Download>,
     model_error: Option<std::io::Error>,
     misconversion_download: Option<misconversions::Download>,
@@ -216,6 +221,7 @@ impl App {
         };
         let mut keyboard = Keyboard::new(creation.egui_ctx.clone());
         keyboard.configure_typo(&settings.typo, settings.report_typos, &directory);
+        keyboard.configure_translation(&settings.translation);
         let mut update = Update::default();
         if !cfg!(debug_assertions) {
             update.check(&creation.egui_ctx);
@@ -249,6 +255,7 @@ impl App {
             update,
             api_key_edits: HashMap::new(),
             api_key_before_url: None,
+            translation_key_edit: None,
             model_download: None,
             misconversion_download: None,
             misconversion_error: None,
@@ -289,6 +296,28 @@ impl App {
                     )
                 })?;
         }
+        proposed.translation.url = proposed.translation.url.trim().to_owned();
+        proposed.translation.model = proposed.translation.model.trim().to_owned();
+        if let Some(edit) = &self.translation_key_edit {
+            let scope = proposed.translation.api_key_scope().ok_or_else(|| {
+                tr("翻訳先の API URL を入力してください").to_owned()
+            })?;
+            let result = match edit {
+                Some(key) => vime::credentials::protect(key.trim(), &scope).map(|protected| {
+                    proposed.translation.protected_api_keys.insert(scope, protected);
+                }),
+                None => {
+                    proposed.translation.protected_api_keys.remove(&scope);
+                    Ok(())
+                }
+            };
+            result.map_err(|error| {
+                tr_args(
+                    "API キーを保護できませんでした ({0})",
+                    &[&error.to_string()],
+                )
+            })?;
+        }
         let prepared = match self.hotkeys.as_ref() {
             Some(hotkeys) => Some(hotkeys.prepare(&self.draft.hotkey)?),
             None if self.settings.hotkey != self.draft.hotkey => {
@@ -308,6 +337,7 @@ impl App {
         self.draft = proposed;
         self.api_key_edits.clear();
         self.api_key_before_url = None;
+        self.translation_key_edit = None;
         let theme_changed = self.settings.keyboard_theme != self.draft.keyboard_theme;
         self.dashboard.redraw |= theme_changed;
         self.settings = self.draft.clone();
@@ -325,6 +355,9 @@ impl App {
             self.settings.report_typos,
             &self.directory,
         );
+        self.keyboard
+            .configure_translation(&self.settings.translation);
+        self.dashboard.redraw = true;
         if let Some(vr) = &mut self.vr
             && let Err(error) = vr.set_width(self.settings.overlay_width)
         {
@@ -422,6 +455,21 @@ impl App {
         self.dashboard.redraw = true;
     }
 
+    /// Switches the language the keyboard translates to and remembers it.
+    fn cycle_translation_target(&mut self) {
+        let target = self.settings.translation.target.next();
+        self.settings.translation.target = target;
+        self.draft.translation.target = target;
+        if let Err(error) = self.settings.save(&self.directory) {
+            self.keyboard.status(tr_args(
+                "設定を保存できません ({0})",
+                &[&error.to_string()],
+            ));
+        }
+        self.keyboard
+            .configure_translation(&self.settings.translation);
+    }
+
     fn keyboard_action(&mut self, action: Action) {
         if !matches!(action, Action::MoveCaret(_)) {
             keyboard::play_click();
@@ -490,6 +538,7 @@ impl App {
                 }
             }
             Action::ToggleTheme => self.theme_toggle = true,
+            Action::CycleTranslationTarget => self.cycle_translation_target(),
             action => self.keyboard.apply(action),
         }
     }
@@ -984,6 +1033,10 @@ impl App {
             ui.add_space(10.);
             ui.separator();
             ui.add_space(10.);
+            self.translation_settings(ui);
+            ui.add_space(10.);
+            ui.separator();
+            ui.add_space(10.);
             self.typo_settings(ui);
             ui.add_space(10.);
             self.typo_report_settings(ui);
@@ -1007,7 +1060,8 @@ impl App {
                     .add_enabled(
                         self.draft != self.settings
                             || !self.api_key_edits.is_empty()
-                            || self.api_key_before_url.is_some(),
+                            || self.api_key_before_url.is_some()
+                            || self.translation_key_edit.is_some(),
                         primary(ui, tr("設定を保存")),
                     )
                     .clicked()
@@ -1062,6 +1116,78 @@ impl App {
             ui.add(widgets::Slider::new(&mut self.draft.overlay_width, 0.65..=1.65).suffix(" m"));
         });
         dashboard::keyboard_theme_options(ui, &mut self.draft.keyboard_theme);
+    }
+
+    fn translation_settings(&mut self, ui: &mut Ui) {
+        let translation = &mut self.draft.translation;
+        ui.label(RichText::new(tr("翻訳")).weak());
+        widgets::checkbox(
+            ui,
+            &mut translation.enabled,
+            tr("入力欄の上に翻訳を表示する"),
+        );
+        if !translation.enabled {
+            return;
+        }
+        ui.label(tr("OpenAI 互換 API の URL"));
+        ui.add(system_one_field(&mut translation.url).hint_text("http://127.0.0.1:1234/v1"));
+        ui.label(tr("モデル名（任意）"));
+        ui.add(system_one_field(&mut translation.model));
+        ui.horizontal_wrapped(|ui| {
+            ui.label(tr("翻訳先"));
+            egui::ComboBox::from_id_salt("translation_target")
+                .selected_text(translation.target.label())
+                .show_ui(ui, |ui| {
+                    for target in TranslationTarget::ALL {
+                        ui.selectable_value(&mut translation.target, target, target.label());
+                    }
+                });
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(tr("入力が止まってから翻訳するまで"));
+            ui.add(
+                widgets::Slider::new(
+                    &mut translation.delay_ms,
+                    MIN_TRANSLATION_DELAY_MS..=MAX_TRANSLATION_DELAY_MS,
+                )
+                .suffix(" ms"),
+            );
+        });
+
+        let scope = translation.api_key_scope();
+        let saved = scope
+            .as_ref()
+            .is_some_and(|scope| translation.protected_api_keys.contains_key(scope));
+        let removed = matches!(self.translation_key_edit, Some(None));
+        let mut text = self
+            .translation_key_edit
+            .clone()
+            .flatten()
+            .unwrap_or_default();
+        ui.label(tr("API キー（任意）"));
+        let placeholder = if saved && !removed {
+            tr("保存済み（変更する場合は入力）")
+        } else {
+            tr("API キーを入力")
+        };
+        if ui
+            .add(api_key_input(&mut text, placeholder).id_salt("translation_api_key"))
+            .changed()
+        {
+            self.translation_key_edit = (!text.trim().is_empty()).then_some(Some(text));
+        }
+        if saved
+            && !removed
+            && ui.small_button(tr("保存済みのキーを削除")).clicked()
+        {
+            self.translation_key_edit = Some(None);
+        }
+        ui.label(
+            RichText::new(tr(
+                "入力したテキストの全文が設定先へ送信されます。翻訳元の言語は自動で判定されます。",
+            ))
+            .small(),
+        );
     }
 
     fn typo_report_settings(&mut self, ui: &mut Ui) {
