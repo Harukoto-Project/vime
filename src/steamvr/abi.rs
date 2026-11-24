@@ -141,7 +141,6 @@ table!(Overlay {
     sort_order: 19(handle: u64, order: u32) -> i32;
     set_width: 21(handle: u64, width: f32) -> i32;
     set_transform: 32(handle: u64, origin: i32, matrix: *const Matrix) -> i32;
-    set_relative_transform: 39(handle: u64, parent: u64, matrix: *const Matrix) -> i32;
     show: 43(handle: u64) -> i32;
     hide: 44(handle: u64) -> i32;
     wait_frame_sync: 47(timeout_ms: u32) -> i32;

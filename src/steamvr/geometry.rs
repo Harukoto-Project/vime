@@ -58,12 +58,18 @@ pub fn hit(panel: &Matrix, aim: &Matrix, width: f32, aspect: f32) -> Option<[f32
     ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some([u, v])
 }
 
-pub fn cursor_transform([u, v]: [f32; 2], width: f32, aspect: f32) -> Matrix {
-    Matrix([
-        [1., 0., 0., (u - 0.5) * width],
-        [0., 1., 0., (0.5 - v) * width / aspect],
-        [0., 0., 1., 0.001],
-    ])
+pub fn cursor_transform(panel: &Matrix, [u, v]: [f32; 2], width: f32, aspect: f32) -> Matrix {
+    let x = (u - 0.5) * width;
+    let y = (0.5 - v) * (width / aspect);
+    // Place the cursor just in front of the panel in the same standing space.
+    Matrix(panel.0.map(|[right, up, back, position]| {
+        [
+            right,
+            up,
+            back,
+            position + right * x + up * y + back * 0.001,
+        ]
+    }))
 }
 
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -93,10 +99,20 @@ mod tests {
         let aim = Matrix([[1., 0., 0., 0.5], [0., 1., 0., 0.25], [0., 0., 1., 1.]]);
         for width in [2., 4.] {
             let uv = hit(&panel, &aim, width, 2.).unwrap();
-            let cursor = cursor_transform(uv, width, 2.);
+            let cursor = cursor_transform(&panel, uv, width, 2.);
             assert_eq!(cursor.0[0][3], aim.0[0][3]);
             assert_eq!(cursor.0[1][3], aim.0[1][3]);
             assert!(cursor.0[2][3] > 0.);
         }
+    }
+
+    #[test]
+    fn cursor_follows_a_translated_and_rotated_panel() {
+        let panel = Matrix([[0., 0., 1., 2.], [1., 0., 0., 3.], [0., 1., 0., 4.]]);
+        let cursor = cursor_transform(&panel, [0.75, 0.25], 2., 2.);
+        assert_eq!(
+            cursor.0,
+            [[0., 0., 1., 2.001], [1., 0., 0., 3.5], [0., 1., 0., 4.25]]
+        );
     }
 }

@@ -50,7 +50,6 @@ impl VrWorker {
             input,
             overlay: Overlay(session.overlay.0),
             actions,
-            keyboard: session.handle,
             cursors: session.cursors.map(|handle| Cursor {
                 handle,
                 position: None,
@@ -148,7 +147,6 @@ pub struct ControllerState {
     input: Input,
     overlay: Overlay,
     actions: Actions,
-    keyboard: u64,
     cursors: [Cursor; 2],
     size: [f32; 2],
     width: f32,
@@ -313,14 +311,7 @@ impl ControllerState {
             self.armed[hand] = click.is_some_and(|data| !data.state);
             self.frame.keyboard_down[hand] = down;
             if let Some(uv) = self.pointer_position(hand, source, &panel, now) {
-                self.cursors[hand].update(
-                    &self.overlay,
-                    self.keyboard,
-                    uv,
-                    down,
-                    self.width,
-                    self.size,
-                );
+                self.cursors[hand].update(&self.overlay, &panel, uv, down, self.width, self.size);
                 *press = pressed.then_some(uv);
             } else {
                 self.cursors[hand].hide(&self.overlay);
@@ -380,7 +371,7 @@ impl Cursor {
     fn update(
         &mut self,
         overlay: &Overlay,
-        parent: u64,
+        panel: &Matrix,
         uv: [f32; 2],
         down: bool,
         width: f32,
@@ -397,8 +388,8 @@ impl Cursor {
         if self.position == Some((uv, width)) {
             return;
         }
-        let transform = geometry::cursor_transform(uv, width, size[0] / size[1]);
-        if overlay.set_relative_transform(self.handle, parent, &transform) == 0
+        let transform = geometry::cursor_transform(panel, uv, width, size[0] / size[1]);
+        if overlay.set_transform(self.handle, abi::STANDING, &transform) == 0
             && (self.position.is_some() || overlay.show(self.handle) == 0)
         {
             self.position = Some((uv, width));
