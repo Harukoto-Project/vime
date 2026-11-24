@@ -230,13 +230,11 @@ unsafe extern "system" fn window_proc(
             return 0;
         }
         WM_NCDESTROY => state.detach(reference),
-        message if message != 0 && message == state.taskbar_created => {
-            if !state.add_icon() {
-                if state.hidden.get() {
-                    state.open();
-                }
-                state.detach(reference);
+        message if message != 0 && message == state.taskbar_created && !state.add_icon() => {
+            if state.hidden.get() {
+                state.open();
             }
+            state.detach(reference);
         }
         _ => {}
     }

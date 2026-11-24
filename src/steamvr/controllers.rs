@@ -449,7 +449,8 @@ pub fn configure_cursor(
     )?;
     let color = [[215, 194, 255], [159, 211, 255]][hand];
     let mut pixels = [0u8; (CURSOR_SIZE * CURSOR_SIZE * 4) as usize];
-    for (index, pixel) in pixels.chunks_exact_mut(4).enumerate() {
+    let (rgba_pixels, _) = pixels.as_chunks_mut::<4>();
+    for (index, pixel) in rgba_pixels.iter_mut().enumerate() {
         let center = CURSOR_SIZE as f32 / 2. - 0.5;
         let x = (index as u32 % CURSOR_SIZE) as f32 - center;
         let y = (index as u32 / CURSOR_SIZE) as f32 - center;

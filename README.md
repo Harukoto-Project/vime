@@ -4,7 +4,7 @@ ViME is an open-source IME keyboard for SteamVR on Windows. Type in Japanese, En
 
 **[Download for Windows (GitHub Releases)](https://github.com/Harukoto-Project/vime/releases)**
 
-[Install](#install) · [VRChat](#send-a-message-to-vrchat) · [Typing and conversion](#switch-languages-and-convert-text) · [Typo correction](#typo-correction) · [Run from source](#run-from-source)
+[Install](#install) · [Startup and system tray](#steamvr-startup-and-the-windows-system-tray) · [VRChat](#send-a-message-to-vrchat) · [Typing and conversion](#switch-languages-and-convert-text) · [Typo correction](#typo-correction) · [Run from source](#run-from-source)
 
 [English](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
@@ -28,15 +28,26 @@ ViME is an open-source IME keyboard for SteamVR on Windows. Type in Japanese, En
 
 If a release ZIP is unavailable, [run ViME from source](#run-from-source).
 
-Release builds check GitHub Releases for updates at startup. Once an update is ready, ViME applies it when you quit. Select **Settings → Restart to update** to apply it immediately.
+Release builds check GitHub Releases for updates at startup. Once an update is ready, ViME applies it when you quit via **Exit ViME** in the system tray. Select **Settings → Restart to update** to apply it immediately.
+
+## SteamVR startup and the Windows system tray
+
+1. Run ViME and connect it to SteamVR once to register the overlay.
+2. In SteamVR, open **Settings → Startup / Shutdown → Choose Startup Overlay Apps** and turn on **ViME**. When SteamVR starts it, ViME runs in the Windows system tray with its window hidden.
+
+Closing the ViME window also keeps ViME running in the tray, so you can keep using the VR keyboard. Click the tray icon or right-click it and choose **Open window** to reopen the Windows app. To quit, right-click the icon and choose **Exit ViME**.
 
 ## Send a message to VRChat
 
-1. In the VRChat Action Menu, turn on **OSC → Enabled**. Keep ViME’s destination set to **VRChat OSC**. **Discover via OSCQuery** detects VRChat’s receiving port on the same PC. If discovery finds no port, ViME uses the configured UDP port (`9000` by default). With an existing ViME configuration, enable discovery in **Settings** and save. [Official VRChat OSCQuery guide](https://docs.vrchat.com/docs/oscquery)
+1. In the VRChat Action Menu, turn on **OSC → Enabled**. Keep ViME’s destination set to **VRChat OSC**.
 2. Click the **right thumbstick** (**right trackpad** on Vive Wand) or press **Ctrl+Shift+F8** on your PC to open the keyboard. Point either controller at a key and press the trigger to type.
 3. Type a message and press **Enter** on the VR keyboard to send it to the Chatbox. While converting text, the first **Enter** confirms your text. Press it again to send.
 
-Keep ViME running during your VR session. The **ViME** tab in the SteamVR dashboard also gives you access to the keyboard, output settings, and controller bindings.
+The left and right pointers render independently and update in sync with SteamVR frames, so they can track your controllers between keyboard redraws.
+
+**Discover via OSCQuery** finds VRChat’s receiving UDP port on the same PC. It is on by default for new configurations. If you are upgrading with saved v1.0.0 settings, enable it in **Settings** and save. ViME uses the configured UDP port (`9000` by default) while discovery is off or no port is detected. [Official VRChat OSCQuery guide](https://docs.vrchat.com/docs/oscquery)
+
+The **ViME** tab in the SteamVR dashboard gives you access to the keyboard, output settings, and controller bindings.
 
 In the Windows app’s **Settings**, you can change the OSC notification sound, toggle shortcut, and VR keyboard width. Settings are stored at `%LOCALAPPDATA%\ViME\settings.json`.
 
@@ -45,7 +56,7 @@ In the Windows app’s **Settings**, you can change the OSC notification sound, 
 - **Japanese** uses a JIS layout with romaji input. Use the space bar to open conversion candidates for kanji and katakana. Digits and Latin letters stay half-width, while punctuation is full-width by default, including Japanese `、` and `。`. Pick half-width punctuation or katakana from the candidates. The **半/全** key switches to direct half-width input.
 - **English** uses QWERTY. **Korean** uses Dubeolsik, with **한/영** to switch to direct Latin input.
 - Open the emoji, kaomoji, and symbol palette with **😃** at the bottom left. In English mode, you can also look up emoji with shortcodes such as `:cat:`.
-- Hold **Backspace** or **Space** to repeat the action. Key presses play a click sound.
+- In unconfirmed Japanese input, **Backspace** removes one displayed character at a time, so `きゃ` becomes `き`. Hold **Backspace** or **Space** to repeat the action. Key presses play a click sound.
 
 ![The Japanese candidate bar offers both full-width パーティー and half-width ﾊﾟｰﾃｨｰ.](assets/vr-conversion.png)
 

@@ -80,9 +80,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          flags=""
-          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
+          flags=(--generate-notes)
+          notes_file=".github/release-notes/$GITHUB_REF_NAME.md"
+          if [[ -f "$notes_file" ]]; then
+            flags=(--notes-file "$notes_file")
+          fi
+          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.sha256 \
             --title "ViME $VERSION" \
-            --generate-notes \
-            $flags
+            "${flags[@]}"
