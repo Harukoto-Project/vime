@@ -18,6 +18,8 @@ SteamVR コントローラーを取得	Getting the SteamVR controller	SteamVR �
 SteamVR ダッシュボードに ViME を追加	Adding ViME to the SteamVR dashboard	SteamVR 대시보드에 ViME 추가
 SteamVR との接続が終了しました	The SteamVR connection ended	SteamVR 연결이 종료되었습니다
 SteamVR に接続	Connect to SteamVR	SteamVR에 연결
+SteamVR 起動時の ViME 自動起動がオフです	ViME won’t start with SteamVR	SteamVR 시작 시 ViME 자동 실행이 꺼져 있습니다
+SteamVR の「スタートアップ／シャットダウン」→「スタートアップオーバーレイアプリを選択」で ViME をオンにしてください。	In SteamVR, go to Startup / Shutdown → Choose Startup Overlay Apps and turn on ViME.	SteamVR의 시작/종료 → 시작 오버레이 앱 선택에서 ViME를 켜세요.
 SteamVR への接続	Connecting to SteamVR	SteamVR 연결
 SteamVR のパスをUTF-8に変換できません	Could not convert the SteamVR path to UTF-8	SteamVR 경로를 UTF-8로 변환할 수 없습니다
 SteamVR バインド画面を開く	Opening the SteamVR binding screen	SteamVR 바인딩 화면 열기
@@ -167,3 +169,5 @@ v{0} をダウンロード中…	Downloading v{0}…	v{0} 다운로드 중…
 アップデートを適用できませんでした	Could not apply the update	업데이트를 적용하지 못했습니다
 更新ファイルを展開できませんでした	Could not extract the update files	업데이트 파일의 압축을 풀지 못했습니다
 Windows x64 用の更新ファイルが見つかりません	The Windows x64 update files are missing	Windows x64 업데이트 파일을 찾을 수 없습니다
+ウィンドウを開く	Open window	창 열기
+ViME を終了	Exit ViME	ViME 종료

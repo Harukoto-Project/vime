@@ -19,6 +19,8 @@ use std::{
 type Result<T> = std::result::Result<T, String>;
 static RUNTIME_LOCK: Mutex<()> = Mutex::new(());
 
+pub const LAUNCH_ARGUMENT: &str = "--steamvr-launch";
+
 #[derive(Default)]
 pub struct Frame {
     pub toggle: bool,
@@ -148,8 +150,9 @@ impl SteamVr {
         let input = Input(runtime.table(abi::INPUT)?);
         let applications = Applications(runtime.table(abi::APPLICATIONS)?);
 
+        // SteamVR needs the manifest on the next startup to launch ViME.
         checked(
-            applications.add_manifest(app_path.as_ptr(), true),
+            applications.add_manifest(app_path.as_ptr(), false),
             tr("ViME を SteamVR に登録"),
         )?;
         checked(
@@ -297,6 +300,10 @@ impl SteamVr {
 
     pub fn scene_pid(&self) -> u32 {
         self.applications.scene_pid()
+    }
+
+    pub fn auto_launch_enabled(&self) -> bool {
+        self.applications.auto_launch(actions::APP_KEY.as_ptr())
     }
 
     pub fn visible(&self) -> bool {

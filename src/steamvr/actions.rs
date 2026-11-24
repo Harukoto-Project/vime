@@ -1,3 +1,4 @@
+use super::LAUNCH_ARGUMENT;
 use serde_json::{Value, json};
 use std::{
     env, fs, io,
@@ -126,8 +127,10 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
                 "app_key": APP_KEY.to_str().unwrap(),
                 "launch_type": "binary",
                 "binary_path_windows": executable,
+                "arguments": LAUNCH_ARGUMENT,
                 "action_manifest_path": "actions.json",
                 "is_overlay": true,
+                "is_dashboard_overlay": true,
                 "strings": { "en_us": { "name": "ViME", "description": "Virtual keyboard with IME" } }
             }]
         }),
@@ -140,4 +143,28 @@ fn write_json(path: &Path, value: &Value) -> io::Result<()> {
     serde_json::to_writer_pretty(temporary.as_file_mut(), value)?;
     temporary.persist(path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registers_the_current_executable_as_a_startup_overlay() {
+        let directory = tempfile::tempdir().unwrap();
+        let (application, actions) = write_manifests(directory.path()).unwrap();
+        let manifest: Value = serde_json::from_slice(&fs::read(application).unwrap()).unwrap();
+        let application = &manifest["applications"][0];
+        assert_eq!(application["app_key"], APP_KEY.to_str().unwrap());
+        assert_eq!(application["is_dashboard_overlay"], true);
+        assert_eq!(
+            application["binary_path_windows"],
+            json!(env::current_exe().unwrap())
+        );
+        assert_eq!(application["arguments"], LAUNCH_ARGUMENT);
+        assert_eq!(
+            application["action_manifest_path"],
+            actions.file_name().unwrap().to_str().unwrap()
+        );
+    }
 }

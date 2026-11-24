@@ -12,6 +12,8 @@ mod keyboard;
 mod overlay_surface;
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod power;
+#[cfg(all(windows, target_arch = "x86_64"))]
+mod tray;
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 fn main() -> eframe::Result {

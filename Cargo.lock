@@ -2357,6 +2357,7 @@ dependencies = [
  "egui_glow",
  "global-hotkey",
  "libloading",
+ "raw-window-handle",
  "semver",
  "serde",
  "serde_json",

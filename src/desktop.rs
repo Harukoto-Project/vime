@@ -4,6 +4,7 @@ use crate::{
     keyboard::{self, Action, CalibrationJob, Keyboard, Repeater, VrKeys},
     overlay_surface::OverlaySurface,
     power,
+    tray::Tray,
 };
 use eframe::egui::{
     self, Align, Button, Color32, FontData, FontDefinitions, FontFamily, Frame, Layout, Margin,
@@ -23,7 +24,7 @@ use vime::{
     local_d1::{self, Download},
     misconversions, output,
     settings::{D1Device, Destination, Settings, TypoProvider, TypoSettings},
-    steamvr::{SteamVr, Surface},
+    steamvr::{LAUNCH_ARGUMENT, SteamVr, Surface},
     update::{self, Update},
 };
 
@@ -37,6 +38,7 @@ const ERROR: Color32 = Color32::from_rgb(255, 177, 168);
 const WIDE_LAYOUT: f32 = 640.;
 const MAX_PAGE_WIDTH: f32 = 1080.;
 const HIDDEN_PAINT_RETRY: Duration = Duration::from_millis(50);
+const AUTO_LAUNCH_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Welcome {
@@ -54,6 +56,7 @@ enum Page {
 
 pub fn run() -> eframe::Result {
     power::disable_throttling();
+    let launch_from_steamvr = env::args_os().any(|arg| arg == LAUNCH_ARGUMENT);
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_inner_size([980., 826.])
@@ -70,11 +73,12 @@ pub fn run() -> eframe::Result {
     eframe::run_native(
         "ViME",
         options,
-        Box::new(|creation| Ok(Box::new(App::new(creation)?))),
+        Box::new(move |creation| Ok(Box::new(App::new(creation, launch_from_steamvr)?))),
     )
 }
 
 struct App {
+    tray: Option<Tray>,
     directory: PathBuf,
     settings: Settings,
     draft: Settings,
@@ -83,6 +87,7 @@ struct App {
     surfaces: Result<Surfaces, String>,
     vr: Option<SteamVr>,
     auto_connect: bool,
+    steamvr_auto_launch: Option<(bool, Instant)>,
     page: Page,
     /// Shown until the first settings are saved.
     welcome: bool,
@@ -138,7 +143,10 @@ impl Surfaces {
 }
 
 impl App {
-    fn new(creation: &eframe::CreationContext<'_>) -> std::io::Result<Self> {
+    fn new(
+        creation: &eframe::CreationContext<'_>,
+        launch_from_steamvr: bool,
+    ) -> std::io::Result<Self> {
         i18n::set_language(Lang::system());
         let directory = Settings::directory()?;
         let (settings, mut settings_message) = match Settings::load(&directory) {
@@ -149,6 +157,7 @@ impl App {
             ),
         };
         i18n::set_language(settings.language);
+        let tray = Tray::new(creation, launch_from_steamvr);
         let welcome = !Settings::saved(&directory);
         let mut draft = settings.clone();
         if welcome {
@@ -184,6 +193,7 @@ impl App {
             update.check(&creation.egui_ctx);
         }
         Ok(Self {
+            tray,
             directory,
             draft,
             settings,
@@ -192,6 +202,7 @@ impl App {
             surfaces,
             vr: None,
             auto_connect: true,
+            steamvr_auto_launch: None,
             page: Page::default(),
             welcome,
             dashboard: Dashboard::default(),
@@ -328,6 +339,7 @@ impl App {
 
     fn disconnect(&mut self) {
         self.vr = None;
+        self.steamvr_auto_launch = None;
         self.world_keys = None;
         self.pending_world_keys = None;
         self.last_world = None;
@@ -1419,6 +1431,10 @@ fn editable_api_key_scope(typo: &TypoSettings) -> Option<String> {
 
 impl eframe::App for App {
     fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.tray.as_ref().is_some_and(Tray::take_exit_request) {
+            context.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         self.dashboard.redraw |= self.update.poll();
         if let Some(result) = self.model_download.as_ref().and_then(Download::result) {
             self.model_download = None;
@@ -1503,8 +1519,21 @@ impl eframe::App for App {
         }
         let now = Instant::now();
         let desktop_minimized = context.input(|input| input.viewport().minimized == Some(true));
-        if !desktop_minimized {
+        if !desktop_minimized && !self.tray.as_ref().is_some_and(Tray::hidden) {
             context.request_repaint_after(self.keyboard.caret_blink(now).1);
+            if let Some(vr) = &self.vr {
+                let remaining = self
+                    .steamvr_auto_launch
+                    .map_or(Duration::ZERO, |(_, checked)| {
+                        AUTO_LAUNCH_CHECK_INTERVAL.saturating_sub(now - checked)
+                    });
+                if remaining.is_zero() {
+                    self.steamvr_auto_launch = Some((vr.auto_launch_enabled(), now));
+                    context.request_repaint_after(AUTO_LAUNCH_CHECK_INTERVAL);
+                } else {
+                    context.request_repaint_after(remaining);
+                }
+            }
         }
         self.schedule_vr_deadlines(context, now);
         if let Some(delay) = self.overlay_paint_delay(now) {
@@ -1524,7 +1553,9 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.paint_requested = None;
         self.paint_overlay(ui.ctx());
-        if ui.input(|input| input.viewport().minimized != Some(true)) {
+        if !self.tray.as_ref().is_some_and(Tray::hidden)
+            && ui.input(|input| input.viewport().minimized != Some(true))
+        {
             self.desktop_ui(ui);
         }
         let now = Instant::now();
@@ -1549,6 +1580,9 @@ impl eframe::App for App {
 impl App {
     fn desktop_ui(&mut self, ui: &mut Ui) {
         // The root ui is rebuilt by eframe, including after a hidden-window VR frame.
+        if matches!(self.steamvr_auto_launch, Some((false, _))) {
+            steamvr_auto_launch_warning(ui);
+        }
         let margin = if ui.available_width() >= WIDE_LAYOUT {
             Margin::symmetric(27, 18)
         } else {
@@ -1575,6 +1609,25 @@ impl App {
                     });
             });
     }
+}
+
+fn steamvr_auto_launch_warning(ui: &mut Ui) {
+    let ink = Color32::from_rgb(255, 222, 160);
+    Frame::new()
+        .fill(Color32::from_rgb(61, 45, 25))
+        .inner_margin(Margin::symmetric(16, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(
+                RichText::new(tr("SteamVR 起動時の ViME 自動起動がオフです"))
+                    .color(ink)
+                    .strong(),
+            );
+            ui.label(
+                RichText::new(tr("SteamVR の「スタートアップ／シャットダウン」→「スタートアップオーバーレイアプリを選択」で ViME をオンにしてください。"))
+                    .color(ink),
+            );
+        });
 }
 
 fn primary(label: &str) -> Button<'_> {

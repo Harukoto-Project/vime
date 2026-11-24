@@ -131,6 +131,7 @@ table!(System {
 table!(Applications {
     add_manifest: 0(path: *const c_char, temporary: bool) -> i32;
     identify: 11(pid: u32, key: *const c_char) -> i32;
+    auto_launch: 18(key: *const c_char) -> bool;
     scene_pid: 29() -> u32;
 });
 
