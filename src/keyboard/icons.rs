@@ -12,15 +12,29 @@ pub(super) enum Icon {
     Paste,
     Backspace,
     Enter,
+    Close,
+    Emoji,
+    ArrowBack,
+    ArrowForward,
+    ChevronLeft,
+    ChevronRight,
+    Check,
 }
 
-static IMAGES: LazyLock<[Arc<ColorImage>; 5]> = LazyLock::new(|| {
+static IMAGES: LazyLock<[Arc<ColorImage>; 12]> = LazyLock::new(|| {
     [
         include_bytes!("../../assets/keyboard/send.png").as_slice(),
         include_bytes!("../../assets/keyboard/content-copy.png").as_slice(),
         include_bytes!("../../assets/keyboard/content-paste.png").as_slice(),
         include_bytes!("../../assets/keyboard/backspace.png").as_slice(),
         include_bytes!("../../assets/keyboard/keyboard-return.png").as_slice(),
+        include_bytes!("../../assets/keyboard/close.png").as_slice(),
+        include_bytes!("../../assets/keyboard/emoji.png").as_slice(),
+        include_bytes!("../../assets/keyboard/arrow-back.png").as_slice(),
+        include_bytes!("../../assets/keyboard/arrow-forward.png").as_slice(),
+        include_bytes!("../../assets/keyboard/chevron-left.png").as_slice(),
+        include_bytes!("../../assets/keyboard/chevron-right.png").as_slice(),
+        include_bytes!("../../assets/keyboard/check.png").as_slice(),
     ]
     .map(|bytes| {
         let png = from_png_bytes(bytes).expect("embedded Material icon is a PNG");
@@ -39,6 +53,13 @@ impl Icon {
             Self::Paste => tr("貼り付け"),
             Self::Backspace => "Backspace",
             Self::Enter => "Enter",
+            Self::Close => tr("全消去"),
+            Self::Emoji => tr("絵文字・記号"),
+            Self::ArrowBack => tr("前の文節"),
+            Self::ArrowForward => tr("次の文節"),
+            Self::ChevronLeft => tr("前のページ"),
+            Self::ChevronRight => tr("次のページ"),
+            Self::Check => tr("修正候補"),
         }
     }
 

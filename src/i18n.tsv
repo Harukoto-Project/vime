@@ -51,6 +51,9 @@ Windows 開閉ショートカット	Windows toggle shortcut	Windows 열기/닫�
 キーボードを開く	Open keyboard	키보드 열기
 キーボードを閉じる	Close keyboard	키보드 닫기
 キーボード幅	Keyboard width	키보드 너비
+キーボードのテーマ	Keyboard theme	키보드 테마
+ライト	Light	라이트
+ダーク	Dark	다크
 このプロセスは既に SteamVR に接続しています	This process is already connected to SteamVR	이 프로세스는 이미 SteamVR에 연결되어 있습니다
 コントローラーの割り当てを編集	Edit controller bindings	컨트롤러 설정 편집
 コントローラー設定を読み込み	Loading the controller configuration	컨트롤러 설정 불러오기
@@ -84,6 +87,11 @@ Windows 開閉ショートカット	Windows toggle shortcut	Windows 열기/닫�
 先に SteamVR に接続してください	Connect to SteamVR first	먼저 SteamVR에 연결하세요
 送信	Send	전송
 全消去	Clear all	모두 지우기
+前の文節	Previous clause	이전 구절
+次の文節	Next clause	다음 구절
+前のページ	Previous page	이전 페이지
+次のページ	Next page	다음 페이지
+修正候補	Suggested correction	교정 후보
 コピー	Copy	복사
 貼り付け	Paste	붙여넣기
 クリップボードにコピーしました	Copied to clipboard	클립보드에 복사했습니다

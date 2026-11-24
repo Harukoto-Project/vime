@@ -27,6 +27,7 @@ mod tests {
         let mut settings = Settings::default();
         settings.save(directory.path()).unwrap();
         settings.destination = Destination::SteamVrInput;
+        settings.keyboard_theme = KeyboardTheme::Light;
         settings.hotkey = "Alt+F8".into();
         settings.save(directory.path()).unwrap();
         let mut invalid = settings.clone();
@@ -304,6 +305,25 @@ impl TypoSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyboardTheme {
+    Light,
+    #[default]
+    Dark,
+}
+
+impl KeyboardTheme {
+    pub const ALL: [Self; 2] = [Self::Light, Self::Dark];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Light => tr("ライト"),
+            Self::Dark => tr("ダーク"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct Settings {
@@ -314,6 +334,7 @@ pub struct Settings {
     pub osc_notify: bool,
     pub hotkey: String,
     pub overlay_width: f32,
+    pub keyboard_theme: KeyboardTheme,
     pub language: Lang,
     pub typo: TypoSettings,
     pub report_typos: bool,
@@ -329,6 +350,7 @@ impl Default for Settings {
             osc_notify: false,
             hotkey: "Ctrl+Shift+F8".into(),
             overlay_width: 1.08,
+            keyboard_theme: KeyboardTheme::default(),
             typo: TypoSettings::default(),
             report_typos: true,
         }

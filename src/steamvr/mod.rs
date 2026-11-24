@@ -9,6 +9,7 @@ use crate::{
 };
 use abi::{Applications, Input, Matrix, Overlay, Pose, System, Texture};
 use controllers::{Actions, KeyPresses, VrWorker};
+use eframe::egui::{Pos2, Rect, Vec2};
 use libloading::Library;
 use std::{
     ffi::{CStr, CString, c_void},
@@ -34,10 +35,47 @@ pub struct Frame {
     pub toggle: bool,
     pub keyboard_presses: Vec<KeyPresses>,
     pub keyboard_down: [bool; 2],
+    pub keyboard_feedback: [KeyFeedback; 2],
     pub dashboard_visible: bool,
     pub dashboard_active: bool,
     pub dashboard_events: Vec<DashboardEvent>,
     pub quit: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct KeyFeedback {
+    pub hovered: Option<Rect>,
+    pub pressed: Option<Rect>,
+}
+
+pub struct KeyboardTargets {
+    pub panel: Rect,
+    pub editor: Option<Rect>,
+    pub keys: Vec<Rect>,
+}
+
+impl KeyboardTargets {
+    pub fn position(panel: Rect, [u, v]: [f32; 2]) -> Pos2 {
+        panel.min + Vec2::new(u * panel.width(), v * panel.height())
+    }
+
+    pub fn key_at(keys: impl Iterator<Item = Rect>, position: Pos2) -> Option<usize> {
+        keys.enumerate()
+            .filter(|(_, rect)| rect.expand(2.).contains(position))
+            .min_by(|(_, a), (_, b)| {
+                a.distance_sq_to_pos(position)
+                    .total_cmp(&b.distance_sq_to_pos(position))
+            })
+            .map(|(index, _)| index)
+    }
+
+    fn target(&self, uv: [f32; 2]) -> Option<Rect> {
+        let position = Self::position(self.panel, uv);
+        if self.editor.is_some_and(|rect| rect.contains(position)) {
+            return None;
+        }
+        Self::key_at(self.keys.iter().copied(), position).map(|index| self.keys[index])
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -380,6 +418,14 @@ impl SteamVr {
             worker.wake();
         }
         Ok(())
+    }
+
+    pub fn set_keyboard_targets(&self, targets: KeyboardTargets) {
+        self.worker
+            .as_ref()
+            .unwrap()
+            .state()
+            .set_keyboard_targets(targets);
     }
 
     pub fn poll(&mut self) -> Frame {

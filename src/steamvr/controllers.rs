@@ -1,5 +1,5 @@
 use super::{
-    DashboardEvent, Frame, Result, SteamVr, abi,
+    DashboardEvent, Frame, KeyFeedback, KeyboardTargets, Result, SteamVr, abi,
     abi::{ActionPose, ActionSet, Digital, Event, Input, Matrix, Overlay, System},
     checked, geometry,
 };
@@ -63,6 +63,7 @@ impl VrWorker {
             frame: Frame::default(),
             pending: false,
             dashboard_position: None,
+            keyboard_targets: None,
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let worker_state = state.clone();
@@ -188,6 +189,7 @@ pub struct ControllerState {
     frame: Frame,
     pending: bool,
     dashboard_position: Option<[f32; 2]>,
+    keyboard_targets: Option<KeyboardTargets>,
 }
 
 impl ControllerState {
@@ -197,6 +199,7 @@ impl ControllerState {
             toggle: std::mem::take(&mut self.frame.toggle) && !self.frame.dashboard_visible,
             keyboard_presses: std::mem::take(&mut self.frame.keyboard_presses),
             keyboard_down: self.frame.keyboard_down,
+            keyboard_feedback: self.frame.keyboard_feedback,
             dashboard_visible: self.frame.dashboard_visible,
             dashboard_active: self.frame.dashboard_active,
             dashboard_events: std::mem::take(&mut self.frame.dashboard_events),
@@ -217,8 +220,15 @@ impl ControllerState {
         self.width = width;
     }
 
+    pub fn set_keyboard_targets(&mut self, targets: KeyboardTargets) {
+        self.keyboard_targets = Some(targets);
+    }
+
     pub fn set_panel(&mut self, panel: Option<Matrix>) {
         self.panel = panel;
+        if panel.is_none() {
+            self.keyboard_targets = None;
+        }
         self.frame.toggle = false;
         self.frame.keyboard_presses.clear();
         self.clear_pointers();
@@ -227,6 +237,7 @@ impl ControllerState {
     fn clear_pointers(&mut self) {
         self.armed = [false; 2];
         self.frame.keyboard_down = [false; 2];
+        self.frame.keyboard_feedback = [KeyFeedback::default(); 2];
         for (filter, cursor) in self.filters.iter_mut().zip(&mut self.cursors) {
             filter.reset();
             cursor.hide(&self.overlay);
@@ -307,6 +318,7 @@ impl ControllerState {
     fn poll_controllers(&mut self, system: &System, display: &DisplayTiming) -> bool {
         let panel = self.panel.filter(|_| !self.frame.dashboard_visible);
         let before_down = self.frame.keyboard_down;
+        let before_feedback = self.frame.keyboard_feedback;
         let mut sets = [ActionSet::default(), ActionSet::default()];
         sets[0].set = self.actions.toggle_set;
         sets[0].priority = 1;
@@ -319,7 +331,8 @@ impl ControllerState {
         ) != 0
         {
             self.clear_pointers();
-            return before_down != self.frame.keyboard_down;
+            return before_down != self.frame.keyboard_down
+                || before_feedback != self.frame.keyboard_feedback;
         }
 
         let toggle = !self.frame.dashboard_visible
@@ -331,7 +344,9 @@ impl ControllerState {
         let Some(panel) = panel else {
             self.clear_pointers();
             self.frame.keyboard_presses.clear();
-            return toggle || before_down != self.frame.keyboard_down;
+            return toggle
+                || before_down != self.frame.keyboard_down
+                || before_feedback != self.frame.keyboard_feedback;
         };
         let prediction = display.prediction(system);
         let now = Instant::now();
@@ -343,7 +358,15 @@ impl ControllerState {
             let pressed = self.armed[hand] && down;
             self.armed[hand] = click.is_some_and(|data| !data.state);
             self.frame.keyboard_down[hand] = down;
-            if let Some(uv) = self.pointer_position(hand, &panel, prediction, now) {
+            let uv = self.pointer_position(hand, &panel, prediction, now);
+            let feedback = &mut self.frame.keyboard_feedback[hand];
+            feedback.hovered = uv.and_then(|uv| self.keyboard_targets.as_ref()?.target(uv));
+            if !down || uv.is_none() {
+                feedback.pressed = None;
+            } else if pressed {
+                feedback.pressed = feedback.hovered;
+            }
+            if let Some(uv) = uv {
                 self.cursors[hand].update(&self.overlay, &panel, uv, down, self.width, self.size);
                 *press = pressed.then_some(uv);
             } else {
@@ -354,7 +377,10 @@ impl ControllerState {
         if pressed && self.frame.keyboard_presses.len() < MAX_PENDING_INPUTS {
             self.frame.keyboard_presses.push(presses);
         }
-        toggle || pressed || before_down != self.frame.keyboard_down
+        toggle
+            || pressed
+            || before_down != self.frame.keyboard_down
+            || before_feedback != self.frame.keyboard_feedback
     }
 
     fn pointer_position(

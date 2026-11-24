@@ -4,7 +4,8 @@ CC0 1.0 Universal: https://creativecommons.org/publicdomain/zero/1.0/
 
 The included samples are trimmed to the initial strike, volume-matched, and faded.
 
-Send, ContentCopy, ContentPaste, Backspace, and KeyboardReturn by Google (Material Icons)
+Send, ContentCopy, ContentPaste, Backspace, KeyboardReturn, Close, SentimentVerySatisfiedOutlined,
+ArrowBack, ArrowForward, ChevronLeft, ChevronRight, and Check by Google (Material Icons)
 https://mui.com/material-ui/material-icons/
 https://www.npmjs.com/package/@mui/icons-material/v/7.3.4
 Apache License 2.0 (see the repository LICENSE).

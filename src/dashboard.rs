@@ -6,7 +6,7 @@ use eframe::egui::{self, Color32, Event, Frame, Margin, Pos2, RichText, Stroke, 
 use vime::{
     brand,
     i18n::{Lang, tr, tr_args},
-    settings::{Destination, Settings},
+    settings::{Destination, KeyboardTheme, Settings},
     steamvr::DashboardEvent,
     update::{self, Update},
 };
@@ -143,8 +143,14 @@ impl Dashboard {
                 match self.page {
                     Page::Keyboard => {
                         let width = ui.available_width().min(SIZE[0] as f32 - 64.);
-                        let interaction =
-                            keyboard::show(ui, keyboard, width, applied.destination, caret_visible);
+                        let interaction = keyboard::show(
+                            ui,
+                            keyboard,
+                            width,
+                            applied.destination,
+                            applied.keyboard_theme,
+                            caret_visible,
+                        );
                         held = interaction.held;
                         command = interaction.action.map(Command::Keyboard);
                     }
@@ -211,6 +217,7 @@ fn settings(
         controls.label(tr("キーボード幅"));
         controls.add(egui::Slider::new(&mut draft.overlay_width, 0.65..=1.65).suffix(" m"));
         controls.label(tr_args("Windows の開閉キー  {0}", &[&applied.hotkey]));
+        keyboard_theme_options(controls, &mut draft.keyboard_theme);
         controls.add_space(10.);
         controls.label(tr("言語"));
         language_options(controls, &mut draft.language);
@@ -245,6 +252,15 @@ pub fn destination_options(ui: &mut Ui, destination: &mut Destination) {
             Destination::SteamVrInput,
             Destination::SteamVrInput.label(),
         );
+    });
+}
+
+pub fn keyboard_theme_options(ui: &mut Ui, theme: &mut KeyboardTheme) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(tr("キーボードのテーマ"));
+        for option in KeyboardTheme::ALL {
+            ui.selectable_value(theme, option, option.label());
+        }
     });
 }
 

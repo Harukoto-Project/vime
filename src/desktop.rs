@@ -25,8 +25,8 @@ use vime::{
     misconversions,
     osc_query::Discovery,
     output,
-    settings::{D1Device, Destination, Settings, TypoProvider, TypoSettings},
-    steamvr::{SteamVr, Surface},
+    settings::{D1Device, Destination, KeyboardTheme, Settings, TypoProvider, TypoSettings},
+    steamvr::{KeyFeedback, SteamVr, Surface},
     update::{self, Update},
 };
 
@@ -108,7 +108,8 @@ struct App {
     dashboard: Dashboard,
     world_keys: Option<VrKeys>,
     pending_world_keys: Option<VrKeys>,
-    last_world: Option<(u64, Destination, bool)>,
+    last_world: Option<WorldFrame>,
+    world_feedback: [KeyFeedback; 2],
     paint_requested: Option<Instant>,
     dashboard_visible: bool,
     dashboard_revision: Option<(u64, bool)>,
@@ -134,6 +135,15 @@ struct App {
 
 const DESKTOP: usize = 0;
 const DASHBOARD: usize = 1;
+
+#[derive(PartialEq)]
+struct WorldFrame {
+    revision: u64,
+    destination: Destination,
+    theme: KeyboardTheme,
+    feedback: [KeyFeedback; 2],
+    caret_visible: bool,
+}
 
 struct Surfaces {
     keyboard: OverlaySurface,
@@ -226,6 +236,7 @@ impl App {
             world_keys: None,
             pending_world_keys: None,
             last_world: None,
+            world_feedback: Default::default(),
             paint_requested: None,
             dashboard_visible: false,
             dashboard_revision: None,
@@ -294,6 +305,7 @@ impl App {
         self.draft = proposed;
         self.api_key_edits.clear();
         self.api_key_before_url = None;
+        self.dashboard.redraw |= self.settings.keyboard_theme != self.draft.keyboard_theme;
         self.settings = self.draft.clone();
         if !uses_osc_query(&self.settings) {
             self.osc_query = None;
@@ -355,6 +367,7 @@ impl App {
         self.world_keys = None;
         self.pending_world_keys = None;
         self.last_world = None;
+        self.world_feedback = Default::default();
         self.draw_errors[0] = None;
         self.world_repeaters = Default::default();
     }
@@ -365,6 +378,7 @@ impl App {
         self.world_keys = None;
         self.pending_world_keys = None;
         self.last_world = None;
+        self.world_feedback = Default::default();
         self.dashboard.reset();
         self.world_repeaters = Default::default();
         self.repeaters[DASHBOARD].release();
@@ -462,24 +476,36 @@ impl App {
         }
     }
 
+    fn world_frame(&self, caret_visible: bool) -> WorldFrame {
+        WorldFrame {
+            revision: self.keyboard.revision,
+            destination: self.settings.destination,
+            theme: self.settings.keyboard_theme,
+            feedback: self.world_feedback,
+            caret_visible,
+        }
+    }
+
     fn paint_overlay(&mut self, context: &egui::Context) {
+        let now = Instant::now();
+        let (caret_visible, _) = self.keyboard.caret_blink(now);
+        let frame = self.world_frame(caret_visible);
         let (Some(vr), Ok(surfaces)) = (&mut self.vr, &mut self.surfaces) else {
             return;
         };
-        let now = Instant::now();
-        let (caret_visible, _) = self.keyboard.caret_blink(now);
         if vr.visible() && surfaces.keyboard.can_present(now) {
-            let frame = (
-                self.keyboard.revision,
-                self.settings.destination,
-                caret_visible,
-            );
-            let keyboard_changed = self.last_world != Some(frame);
-            if keyboard_changed {
-                self.last_world = Some(frame);
+            if self.last_world.as_ref() != Some(&frame) {
                 self.pending_world_keys = Some(surfaces.keyboard.render(Vec::new(), |ui| {
-                    keyboard::show_vr(ui, &self.keyboard, self.settings.destination, caret_visible)
+                    keyboard::show_vr(
+                        ui,
+                        &self.keyboard,
+                        frame.destination,
+                        frame.theme,
+                        frame.feedback,
+                        frame.caret_visible,
+                    )
                 }));
+                self.last_world = Some(frame);
             }
             if let Some(result) = surfaces
                 .keyboard
@@ -488,6 +514,7 @@ impl App {
                 if result.is_ok()
                     && let Some(keys) = self.pending_world_keys.take()
                 {
+                    vr.set_keyboard_targets(keys.targets());
                     self.world_keys = Some(keys);
                 }
                 self.draw_errors[0] = result.err();
@@ -555,7 +582,7 @@ impl App {
         let (caret_visible, _) = self.keyboard.caret_blink(now);
         let revision = self.keyboard.revision;
         let keyboard_changed = vr.visible()
-            && (self.last_world != Some((revision, self.settings.destination, caret_visible))
+            && (self.last_world.as_ref() != Some(&self.world_frame(caret_visible))
                 || self.draw_errors[0].is_some());
         let dashboard_changed = self.dashboard.redraw
             || self.draw_errors[1].is_some()
@@ -700,6 +727,7 @@ impl App {
             &self.keyboard,
             width,
             self.settings.destination,
+            self.settings.keyboard_theme,
             self.keyboard.caret_blink(Instant::now()).0,
         );
         if self.pointer_repeats(DESKTOP, interaction.action, interaction.held) {
@@ -987,6 +1015,7 @@ impl App {
             ui.label(tr("キーボード幅"));
             ui.add(egui::Slider::new(&mut self.draft.overlay_width, 0.65..=1.65).suffix(" m"));
         });
+        dashboard::keyboard_theme_options(ui, &mut self.draft.keyboard_theme);
     }
 
     fn typo_report_settings(&mut self, ui: &mut Ui) {
@@ -1547,6 +1576,7 @@ impl eframe::App for App {
                     self.dashboard_visible && !frame.dashboard_visible && vr.visible();
                 let resume_dashboard = !self.dashboard.active && frame.dashboard_active;
                 self.dashboard_visible = frame.dashboard_visible;
+                self.world_feedback = frame.keyboard_feedback;
                 if let Ok(surfaces) = &mut self.surfaces {
                     // Retry timing from a hidden overlay must not carry over when it reappears.
                     if resume_world {
