@@ -134,19 +134,21 @@ impl Client {
         let body = serde_json::to_vec(body)?;
         let request = self.request(&endpoint, w!("POST"), false)?;
         request.send(&headers, &body)?;
-        let started = Instant::now();
-        let mut response = Vec::new();
-        let mut chunk = [0u8; 4096];
-        loop {
-            let read = request.read(&mut chunk)?;
-            if read == 0 {
-                return Ok(serde_json::from_slice(&response)?);
-            }
-            if response.len() + read > 64 * 1024 || started.elapsed() > Duration::from_secs(4) {
-                return Err(io::ErrorKind::InvalidData.into());
-            }
-            response.extend_from_slice(&chunk[..read]);
-        }
+        request.read_json()
+    }
+
+    pub(crate) fn get_loopback_json(port: u16, resource: &str) -> io::Result<Value> {
+        let client = Self::open(WINHTTP_ACCESS_TYPE_NO_PROXY, 1000)?;
+        let endpoint = Endpoint {
+            host: "127.0.0.1".encode_utf16().chain([0]).collect(),
+            resource: resource.encode_utf16().chain([0]).collect(),
+            port,
+            secure: false,
+        };
+        let request = client.request(&endpoint, w!("GET"), false)?;
+        request.send(&[], &[])?;
+        request.require_success()?;
+        request.read_json()
     }
 
     /// Stream an HTTPS download, including CDN redirects, without buffering it in memory.
@@ -239,6 +241,22 @@ struct Request {
 }
 
 impl Request {
+    fn read_json(&self) -> io::Result<Value> {
+        let started = Instant::now();
+        let mut response = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            let read = self.read(&mut chunk)?;
+            if read == 0 {
+                return Ok(serde_json::from_slice(&response)?);
+            }
+            if response.len() + read > 64 * 1024 || started.elapsed() > Duration::from_secs(4) {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+            response.extend_from_slice(&chunk[..read]);
+        }
+    }
+
     fn send(&self, headers: &[u16], body: &[u8]) -> io::Result<()> {
         let (header_ptr, header_len) = if headers.is_empty() {
             (null(), 0)

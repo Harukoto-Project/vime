@@ -32,7 +32,7 @@ ViMEは、VR内で日本語・英語・韓国語を入力できる、Windows向�
 
 ## VRChatに送る
 
-1. VRChatのAction Menuで **OSC → Enabled** をオンにします。ViMEの送信先は既定の **VRChat OSC** を使用します。VRChatの受信ポートを変更している場合は、ViMEでも同じポートを設定してください。既定は `9000` です。 [VRChatのOSC公式ガイド](https://docs.vrchat.com/docs/osc-overview)
+1. VRChatのAction Menuで **OSC → Enabled** をオンにします。ViMEの送信先は既定の **VRChat OSC** を使用します。**OSCQuery で自動検出** は、同じPC上のVRChatの受信ポートを検出します。検出できない間は設定済みのUDPポート（既定は `9000`）を使います。すでにViMEの設定を保存している場合は、**設定**で自動検出をオンにして保存してください。 [VRChatのOSCQuery公式ガイド](https://docs.vrchat.com/docs/oscquery)
 2. **右スティック押し込み**（Vive Wandは**右トラックパッド押し込み**）か、PCの **Ctrl+Shift+F8** でキーボードを開きます。左右どちらのコントローラーでも、キーを指してトリガーを押すと入力できます。
 3. 文章を入力し、キーボードの **Enter** でChatboxに送ります。変換中は1回目の **Enter** で文字を確定し、もう一度押すと送信します。
 
@@ -80,7 +80,7 @@ ViMEの **設定** で、送信先を **SteamVR アプリ入力** に変更し�
 ## うまく動かないとき
 
 - **コントローラーで開かない**場合は、まず **Ctrl+Shift+F8** で開けるか確認してください。コントローラーの割り当てはViMEからSteamVRの編集画面を開いて変更できます。カスタム割り当てを使っている場合は、SteamVRでViMEの既定の割り当てに戻せます。
-- **Chatboxに届かない**場合は、VRChatのOSCが有効で、ViMEの送信先が **VRChat OSC** になっているか、受信ポートと一致しているかを確認してください。
+- **Chatboxに届かない**場合は、VRChatのOSCが有効で、ViMEの送信先が **VRChat OSC** になっているか確認してください。検出済みのポートが表示されない場合は、設定したUDPポートがVRChatの受信ポートと一致しているか確認してください。
 - **SteamVRが見つからない**場合は、SteamVRを起動してから再接続してください。別の場所にインストールしている場合は、環境変数 `STEAMVR_PATH` にインストールフォルダを指定できます。
 
 ViMEは試作版です。ヘッドセットやコントローラーごとの動作、VRChatでの受信は実機検証が必要です。不具合の報告には、ViMEのバージョン、機器名、再現手順を添えてください。 [GitHub Issues](https://github.com/Harukoto-Project/vime/issues)

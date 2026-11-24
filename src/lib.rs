@@ -11,6 +11,8 @@ pub mod ime;
 pub mod local_d1;
 #[cfg(all(windows, target_arch = "x86_64"))]
 pub mod misconversions;
+#[cfg(all(windows, target_arch = "x86_64"))]
+pub mod osc_query;
 pub mod output;
 pub mod settings;
 #[cfg(all(windows, target_arch = "x86_64"))]

@@ -7,6 +7,9 @@ LOCALAPPDATA が見つかりません	LOCALAPPDATA was not found	LOCALAPPDATA를
 OpenGL を初期化できません	Could not initialize OpenGL	OpenGL을 초기화할 수 없습니다
 OSC ポートまたはキーボード幅が範囲外です	The OSC port or keyboard width is out of range	OSC 포트 또는 키보드 너비가 범위를 벗어났습니다
 OSCパケットを送信しました	Sent the OSC packet	OSC 패킷을 전송했습니다
+OSCQuery で自動検出	Discover via OSCQuery	OSCQuery로 자동 검색
+検出済み · UDP {0}	Detected · UDP {0}	검색됨 · UDP {0}
+未検出時の UDP ポート	Fallback UDP port	검색되지 않을 때의 UDP 포트
 Spaceで次の候補 · Enterで確定	Space for the next candidate · Enter to confirm	Space로 다음 후보 · Enter로 확정
 Spaceで変換 · Enterで確定	Space to convert · Enter to confirm	Space로 변환 · Enter로 확정
 SteamVR アクションセットを取得	Getting the SteamVR action set	SteamVR 액션 세트 가져오기

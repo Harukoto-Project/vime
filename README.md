@@ -32,7 +32,7 @@ Release builds check GitHub Releases for updates at startup. Once an update is r
 
 ## Send a message to VRChat
 
-1. In the VRChat Action Menu, turn on **OSC → Enabled**. Keep ViME’s destination set to **VRChat OSC**. If you changed VRChat’s receiving port, set ViME to the same port. The default is `9000`. [Official VRChat OSC guide](https://docs.vrchat.com/docs/osc-overview)
+1. In the VRChat Action Menu, turn on **OSC → Enabled**. Keep ViME’s destination set to **VRChat OSC**. **Discover via OSCQuery** detects VRChat’s receiving port on the same PC. If discovery finds no port, ViME uses the configured UDP port (`9000` by default). With an existing ViME configuration, enable discovery in **Settings** and save. [Official VRChat OSCQuery guide](https://docs.vrchat.com/docs/oscquery)
 2. Click the **right thumbstick** (**right trackpad** on Vive Wand) or press **Ctrl+Shift+F8** on your PC to open the keyboard. Point either controller at a key and press the trigger to type.
 3. Type a message and press **Enter** on the VR keyboard to send it to the Chatbox. While converting text, the first **Enter** confirms your text. Press it again to send.
 
@@ -80,7 +80,7 @@ In ViME’s **Settings**, choose **SteamVR app input** as the destination and sa
 ## Troubleshooting
 
 - **The controller shortcut does not open the keyboard.** Try **Ctrl+Shift+F8** first. Open the SteamVR binding editor from ViME to change the controller shortcut or restore the default binding.
-- **Messages do not appear in the Chatbox.** Check that OSC is enabled in VRChat, the destination is **VRChat OSC**, and the receiving port matches.
+- **Messages do not appear in the Chatbox.** Check that OSC is enabled in VRChat and the destination is **VRChat OSC**. If Settings shows no detected port, check that the configured UDP port matches VRChat’s receiving port.
 - **ViME cannot find SteamVR.** Start SteamVR and reconnect. For a custom installation, set the `STEAMVR_PATH` environment variable to the SteamVR installation directory.
 
 ViME is a prototype. Headset rendering, per-controller bindings, and VRChat reception still need testing on actual hardware. Include your ViME version, hardware models, and steps to reproduce when reporting a problem. [GitHub Issues](https://github.com/Harukoto-Project/vime/issues)

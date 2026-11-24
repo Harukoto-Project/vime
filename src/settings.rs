@@ -48,6 +48,14 @@ mod tests {
     }
 
     #[test]
+    fn oscquery_defaults_on_for_new_users_and_preserves_existing_manual_routing() {
+        assert!(Settings::default().osc_query);
+        let previous: Settings = serde_json::from_str(r#"{"osc_port":9100}"#).unwrap();
+        assert!(!previous.osc_query);
+        assert_eq!(previous.osc_port, 9100);
+    }
+
+    #[test]
     fn is_set_up_once_settings_are_saved_and_proposes_local_cuda_d1() {
         let directory = tempfile::tempdir().unwrap();
         assert!(!Settings::saved(directory.path()));
@@ -300,6 +308,8 @@ impl TypoSettings {
 #[serde(default)]
 pub struct Settings {
     pub destination: Destination,
+    #[serde(default)]
+    pub osc_query: bool,
     pub osc_port: u16,
     pub osc_notify: bool,
     pub hotkey: String,
@@ -314,6 +324,7 @@ impl Default for Settings {
         Self {
             language: Lang::system(),
             destination: Destination::Osc,
+            osc_query: true,
             osc_port: 9000,
             osc_notify: false,
             hotkey: "Ctrl+Shift+F8".into(),

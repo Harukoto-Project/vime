@@ -32,7 +32,7 @@ ViME는 Windows에서 실행되는 SteamVR용 오픈 소스 IME 키보드입니�
 
 ## VRChat에 메시지 보내기
 
-1. VRChat의 Action Menu에서 **OSC → Enabled**를 켭니다. ViME의 전송 대상은 기본값인 **VRChat OSC**를 사용합니다. VRChat의 수신 포트를 바꿨다면 ViME에도 같은 포트를 설정하세요. 기본값은 `9000`입니다. [VRChat OSC 공식 가이드](https://docs.vrchat.com/docs/osc-overview)
+1. VRChat의 Action Menu에서 **OSC → Enabled**를 켭니다. ViME의 전송 대상은 기본값인 **VRChat OSC**를 사용합니다. **OSCQuery로 자동 검색**은 같은 PC에서 실행 중인 VRChat의 수신 포트를 찾습니다. 포트를 찾지 못하면 설정된 UDP 포트(기본값 `9000`)를 사용합니다. 기존에 ViME 설정을 저장했다면 **설정**에서 자동 검색을 켜고 저장하세요. [VRChat OSCQuery 공식 가이드](https://docs.vrchat.com/docs/oscquery)
 2. **오른쪽 스틱**(Vive Wand는 **오른쪽 트랙패드**)을 누르거나 PC에서 **Ctrl+Shift+F8**을 눌러 키보드를 엽니다. 어느 쪽 컨트롤러로든 키를 가리키고 트리거를 누르면 입력됩니다.
 3. 메시지를 입력한 뒤 VR 키보드의 **Enter**를 눌러 Chatbox로 보냅니다. 변환 중에는 첫 번째 **Enter**로 글자를 확정하고, 한 번 더 누르면 전송합니다.
 
@@ -80,7 +80,7 @@ ViME의 **설정**에서 전송 대상을 **SteamVR 앱 입력**으로 바꾸고
 ## 문제 해결
 
 - **컨트롤러로 키보드가 열리지 않으면** 먼저 **Ctrl+Shift+F8**로 열어 보세요. ViME에서 SteamVR 할당 편집기를 열어 컨트롤러 단축키를 바꾸거나 기본 할당을 복원할 수 있습니다.
-- **Chatbox에 메시지가 나타나지 않으면** VRChat의 OSC 활성화 상태, ViME의 전송 대상 **VRChat OSC**, 수신 포트가 일치하는지 확인하세요.
+- **Chatbox에 메시지가 나타나지 않으면** VRChat에서 OSC가 켜져 있고 ViME의 전송 대상이 **VRChat OSC**인지 확인하세요. 검색된 포트가 표시되지 않으면 설정된 UDP 포트가 VRChat의 수신 포트와 일치하는지 확인하세요.
 - **SteamVR을 찾지 못하면** SteamVR을 실행한 뒤 다시 연결하세요. 다른 위치에 설치했다면 `STEAMVR_PATH` 환경 변수에 설치 폴더를 지정할 수 있습니다.
 
 ViME는 프로토타입입니다. 헤드셋 화면, 컨트롤러별 할당, VRChat 수신은 실제 기기에서 검증이 필요합니다. 문제를 보고할 때 ViME 버전, 기기 모델, 재현 방법을 함께 알려 주세요. [GitHub Issues](https://github.com/Harukoto-Project/vime/issues)

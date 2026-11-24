@@ -120,7 +120,7 @@ impl Dashboard {
         keyboard: &Keyboard,
         applied: &Settings,
         draft: &mut Settings,
-        (message, update): (&str, &Update),
+        (message, update, osc_port): (&str, &Update, Option<u16>),
         caret_visible: bool,
     ) -> Option<Command> {
         let mut command = None;
@@ -149,7 +149,7 @@ impl Dashboard {
                         command = interaction.action.map(Command::Keyboard);
                     }
                     Page::Settings => {
-                        command = settings(ui, applied, draft, message, update);
+                        command = settings(ui, applied, draft, message, update, osc_port);
                     }
                 }
             });
@@ -165,6 +165,7 @@ fn settings(
     draft: &mut Settings,
     message: &str,
     update: &Update,
+    osc_port: Option<u16>,
 ) -> Option<Command> {
     let mut command = None;
     ui.columns(2, |columns| {
@@ -178,8 +179,9 @@ fn settings(
         if draft.destination == Destination::Osc {
             output.label(tr("VRChat の OSC を有効にしてください"));
             output.add_space(8.);
+            osc_query_option(output, draft, osc_port);
             output.horizontal(|ui| {
-                ui.label(tr("UDP ポート"));
+                ui.label(osc_port_label(draft));
                 ui.label(RichText::new(draft.osc_port.to_string()).strong());
             });
             output.horizontal(|ui| {
@@ -244,6 +246,25 @@ pub fn destination_options(ui: &mut Ui, destination: &mut Destination) {
             Destination::SteamVrInput.label(),
         );
     });
+}
+
+pub fn osc_query_option(ui: &mut Ui, draft: &mut Settings, port: Option<u16>) {
+    ui.horizontal_wrapped(|ui| {
+        ui.checkbox(&mut draft.osc_query, tr("OSCQuery で自動検出"));
+        if draft.osc_query
+            && let Some(port) = port
+        {
+            ui.label(tr_args("検出済み · UDP {0}", &[&port.to_string()]));
+        }
+    });
+}
+
+pub fn osc_port_label(draft: &Settings) -> &'static str {
+    if draft.osc_query {
+        tr("未検出時の UDP ポート")
+    } else {
+        tr("UDP ポート")
+    }
 }
 
 pub fn language_options(ui: &mut Ui, language: &mut Lang) {

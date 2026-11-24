@@ -22,7 +22,9 @@ use vime::{
     calibration::{self, Profile},
     i18n::{self, Lang, tr, tr_args},
     local_d1::{self, Download},
-    misconversions, output,
+    misconversions,
+    osc_query::Discovery,
+    output,
     settings::{D1Device, Destination, Settings, TypoProvider, TypoSettings},
     steamvr::{LAUNCH_ARGUMENT, SteamVr, Surface},
     update::{self, Update},
@@ -39,6 +41,18 @@ const WIDE_LAYOUT: f32 = 640.;
 const MAX_PAGE_WIDTH: f32 = 1080.;
 const HIDDEN_PAINT_RETRY: Duration = Duration::from_millis(50);
 const AUTO_LAUNCH_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+
+fn uses_osc_query(settings: &Settings) -> bool {
+    settings.destination == Destination::Osc && settings.osc_query
+}
+
+fn start_osc_query(settings: &Settings, context: &egui::Context) -> Option<Discovery> {
+    if !uses_osc_query(settings) {
+        return None;
+    }
+    let context = context.clone();
+    Discovery::start(move || context.request_repaint()).ok()
+}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Welcome {
@@ -82,6 +96,7 @@ struct App {
     directory: PathBuf,
     settings: Settings,
     draft: Settings,
+    osc_query: Option<Discovery>,
     hotkeys: Option<Hotkeys>,
     keyboard: Keyboard,
     surfaces: Result<Surfaces, String>,
@@ -196,6 +211,7 @@ impl App {
             tray,
             directory,
             draft,
+            osc_query: start_osc_query(&settings, &creation.egui_ctx),
             settings,
             hotkeys,
             keyboard,
@@ -232,7 +248,7 @@ impl App {
         })
     }
 
-    fn apply_settings(&mut self) -> Result<(), String> {
+    fn apply_settings(&mut self, context: &egui::Context) -> Result<(), String> {
         self.draft.hotkey = self.draft.hotkey.trim().to_owned();
         let mut proposed = self.draft.clone();
         if self.key_before_url(&proposed.typo).is_some() {
@@ -278,6 +294,11 @@ impl App {
         self.api_key_edits.clear();
         self.api_key_before_url = None;
         self.settings = self.draft.clone();
+        if !uses_osc_query(&self.settings) {
+            self.osc_query = None;
+        } else if self.osc_query.is_none() {
+            self.osc_query = start_osc_query(&self.settings, context);
+        }
         self.calibration_check = Instant::now();
         self.keyboard.configure_typo(
             &self.settings.typo,
@@ -355,8 +376,8 @@ impl App {
         }
     }
 
-    fn save_draft(&mut self) {
-        match self.apply_settings() {
+    fn save_draft(&mut self, context: &egui::Context) {
+        match self.apply_settings(context) {
             Ok(()) => {
                 self.settings_error = false;
                 self.settings_message = tr("設定を保存しました").into();
@@ -387,7 +408,12 @@ impl App {
                 let text = self.keyboard.composer.text();
                 let sent = match self.settings.destination {
                     Destination::Osc => {
-                        output::send_osc(&text, self.settings.osc_port, self.settings.osc_notify)
+                        let port = self
+                            .osc_query
+                            .as_ref()
+                            .and_then(Discovery::port)
+                            .unwrap_or(self.settings.osc_port);
+                        output::send_osc(&text, port, self.settings.osc_notify)
                             .map(|_| tr("OSCパケットを送信しました"))
                     }
                     Destination::SteamVrInput => output::send_scene_input(
@@ -455,7 +481,11 @@ impl App {
                     &self.keyboard,
                     &self.settings,
                     &mut self.draft,
-                    (&self.settings_message, &self.update),
+                    (
+                        &self.settings_message,
+                        &self.update,
+                        self.osc_query.as_ref().and_then(Discovery::port),
+                    ),
                     caret_visible,
                 )
             });
@@ -475,7 +505,7 @@ impl App {
                 None
             }
             Some(Command::SaveSettings) => {
-                self.save_draft();
+                self.save_draft(context);
                 None
             }
             Some(Command::Update(action)) => {
@@ -751,7 +781,7 @@ impl App {
             Welcome::Later => self.draft.typo = TypoSettings::default(),
             Welcome::Chosen => {}
         }
-        match self.apply_settings() {
+        match self.apply_settings(context) {
             Ok(()) => {
                 self.welcome = false;
                 self.settings_error = false;
@@ -881,7 +911,7 @@ impl App {
                     )
                     .clicked()
                 {
-                    self.save_draft();
+                    self.save_draft(ui.ctx());
                 }
             });
         });
@@ -899,8 +929,13 @@ impl App {
         ui.label(RichText::new(tr("送信先")).color(SECONDARY));
         dashboard::destination_options(ui, &mut self.draft.destination);
         let hint = if self.draft.destination == Destination::Osc {
+            dashboard::osc_query_option(
+                ui,
+                &mut self.draft,
+                self.osc_query.as_ref().and_then(Discovery::port),
+            );
             ui.horizontal_wrapped(|ui| {
-                ui.label(tr("UDP ポート"));
+                ui.label(dashboard::osc_port_label(&self.draft));
                 ui.add(egui::DragValue::new(&mut self.draft.osc_port).range(1..=65535));
                 ui.checkbox(&mut self.draft.osc_notify, tr("チャット通知音"));
             });
@@ -1436,6 +1471,7 @@ impl eframe::App for App {
             return;
         }
         self.dashboard.redraw |= self.update.poll();
+        self.dashboard.redraw |= self.osc_query.as_mut().is_some_and(Discovery::poll);
         if let Some(result) = self.model_download.as_ref().and_then(Download::result) {
             self.model_download = None;
             self.model_error = result
