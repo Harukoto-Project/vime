@@ -8,12 +8,12 @@ ViME는 Windows에서 실행되는 SteamVR용 오픈 소스 IME 키보드입니�
 
 [English](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-![일본어 인사말을 입력한 ViME VR 키보드. 위쪽에는 언어 선택 탭, 왼쪽 아래에는 이모지 버튼이 있다.](assets/vr-keyboard.png)
+![일본어 인사말을 입력한 ViME VR 키보드. 위쪽에는 언어 선택 탭과 테마 전환 버튼, 입력란 옆에는 전송·복사·붙여넣기 버튼, 왼쪽 아래에는 이모지 버튼이 있다.](assets/vr-keyboard.png)
 
 <details>
 <summary>Windows 키보드 미리보기</summary>
 
-![SteamVR에 연결된 Windows용 ViME의 한국어 두벌식 키보드 미리보기.](assets/readme/windows-keyboard-ko.png)
+![SteamVR에 연결하기 전 Windows용 ViME의 한국어 두벌식 키보드 미리보기.](assets/readme/windows-keyboard-ko.png)
 
 </details>
 
@@ -37,28 +37,32 @@ MSI가 없다면 [소스에서 실행](#소스에서-실행)할 수 있습니다
 1. ViME를 직접 실행하고 SteamVR에 한 번 연결해 오버레이를 등록합니다.
 2. SteamVR에서 **설정 → 시작/종료 → 시작 오버레이 앱 선택**으로 이동해 **ViME**를 켭니다. SteamVR이 ViME를 자동으로 실행하면 창이 숨겨진 상태로 Windows 시스템 트레이에서 실행됩니다.
 
-ViME 창을 닫아도 앱이 시스템 트레이에서 계속 실행되므로 VR 키보드를 계속 사용할 수 있습니다. Windows 창을 다시 열려면 트레이 아이콘을 클릭하거나 마우스 오른쪽 버튼으로 클릭한 뒤 **창 열기**를 선택합니다. 앱을 종료하려면 아이콘을 마우스 오른쪽 버튼으로 클릭하고 **ViME 종료**를 선택합니다.
+ViME 창을 닫아도 앱이 시스템 트레이에서 계속 실행되므로 VR 키보드를 계속 사용할 수 있습니다. Windows 창을 다시 열려면 트레이 아이콘을 클릭하거나 마우스 오른쪽 버튼으로 클릭한 뒤 **창 열기**를 선택합니다. 앱을 종료하려면 아이콘을 마우스 오른쪽 버튼으로 클릭하고 **ViME 종료**를 선택합니다. ViME가 이미 실행 중일 때 시작 메뉴에서 다시 실행하면 두 번째 창을 열지 않고 실행 중인 창을 앞으로 가져옵니다.
 
 ## VRChat에 메시지 보내기
 
 1. VRChat의 Action Menu에서 **OSC → Enabled**를 켭니다. ViME의 전송 대상은 기본값인 **VRChat OSC**를 사용합니다.
 2. **오른쪽 스틱**(Vive Wand는 **오른쪽 트랙패드**)을 누르거나 PC에서 **Ctrl+Shift+F8**을 눌러 키보드를 엽니다. 어느 쪽 컨트롤러로든 키를 가리키고 트리거를 누르면 입력됩니다.
-3. 메시지를 입력한 뒤 VR 키보드의 **Enter**를 눌러 Chatbox로 보냅니다. 변환 중에는 첫 번째 **Enter**로 글자를 확정하고, 한 번 더 누르면 전송합니다.
+3. 메시지를 입력한 뒤 VR 키보드의 **Enter** 또는 전송 버튼을 눌러 Chatbox로 보냅니다. 변환 중에는 첫 번째 **Enter**로 글자를 확정하고, 한 번 더 누르면 전송합니다.
 
-왼쪽과 오른쪽 포인터는 각각 그려지며 SteamVR 프레임에 맞춰 갱신됩니다. 키보드 화면에 변화가 없어도 컨트롤러의 움직임을 따라갑니다.
+입력란 옆의 **×**는 입력한 글자를 지웁니다. 복사와 붙여넣기 버튼은 Windows 클립보드를 사용합니다. 붙여넣은 결과가 VRChat의 제한인 144자를 넘으면 붙여넣지 않습니다. 키보드 위쪽의 해와 달 버튼으로 다크 테마와 라이트 테마를 전환할 수 있습니다.
+
+왼쪽과 오른쪽 포인터는 각각 그려지며 SteamVR 프레임에 맞춰 갱신됩니다. 키보드 화면에 변화가 없어도 컨트롤러의 움직임을 따라갑니다. 키보드는 더 높은 픽셀 밀도로 그려져 글자가 또렷하게 보입니다.
 
 **OSCQuery로 자동 검색**은 같은 PC에서 실행 중인 VRChat의 수신 UDP 포트를 찾습니다. 새 설정에서는 기본적으로 켜져 있습니다. v1.0.0에서 저장한 설정을 이어서 사용한다면 **설정**에서 자동 검색을 켜고 저장하세요. 자동 검색이 꺼져 있거나 포트를 찾지 못하면 설정된 UDP 포트(기본값 `9000`)를 사용합니다. [VRChat OSCQuery 공식 가이드](https://docs.vrchat.com/docs/oscquery)
 
 SteamVR 대시보드의 **ViME** 탭에서도 키보드와 전송 설정을 열고 컨트롤러 할당을 편집할 수 있습니다.
 
-Windows 앱의 **설정**에서 OSC 알림음, 키보드 열기 및 닫기 단축키, VR 키보드 너비를 바꿀 수 있습니다. 설정은 `%LOCALAPPDATA%\ViME\settings.json`에 저장됩니다.
+Windows 앱의 **설정**에서 OSC 알림음, 키보드 열기 및 닫기 단축키, VR 키보드 너비, 키보드 테마(**다크** 또는 **라이트**)를 바꿀 수 있습니다. 테마는 VR 키보드와 Windows 앱에 모두 적용됩니다. 설정은 `%LOCALAPPDATA%\ViME\settings.json`에 저장됩니다.
+
+Windows에 Noto Sans JP가 설치되어 있으면 이 글꼴을 사용합니다. 없으면 Segoe UI와 Windows의 일본어·한국어 시스템 글꼴로 대체합니다.
 
 ## 언어 전환 및 문자 변환
 
 - **일본어**는 JIS 배열에서 로마자로 입력합니다. 스페이스 키를 누르면 한자와 가타카나 변환 후보가 표시됩니다. 숫자와 영문은 반각을 유지하고, 기호는 기본적으로 전각을 사용합니다. 쉼표와 마침표는 각각 `、`와 `。`로 입력됩니다. 변환 후보에서 반각 기호와 가타카나도 선택할 수 있습니다. **半/全** 키는 반각 직접 입력으로 전환합니다.
 - **영어**는 QWERTY, **한국어**는 두벌식을 사용합니다. 한국어 모드에서 **한/영**을 누르면 영문과 숫자를 바로 입력할 수 있습니다.
 - 왼쪽 아래의 **😃**를 누르면 이모지, 얼굴 문자, 기호 목록이 열립니다. 영어 모드에서는 `:cat:` 같은 단축 이름으로 이모지를 찾을 수도 있습니다.
-- 아직 확정하지 않은 일본어 입력에서 **Backspace**를 누르면 화면에 표시된 문자 한 개가 지워집니다. 예를 들어 `きゃ`는 `き`가 됩니다. **Backspace** 또는 **Space**를 길게 누르면 동작이 반복됩니다. 키를 누르면 타건음이 납니다.
+- 아직 확정하지 않은 일본어 입력에서 **Backspace**를 누르면 화면에 표시된 문자 한 개가 지워집니다. 예를 들어 `きゃ`는 `き`가 됩니다. 입력 중인 로마자는 **Backspace** 뒤에도 편집할 수 있으므로 잘못 입력한 글자를 고치고 같은 음을 이어서 입력할 수 있습니다. `kyi`, `swa`, `tsa`, `fwa`, `qa`, `xn` 같은 표기도 지원합니다. **Backspace** 또는 **Space**를 길게 누르면 동작이 반복됩니다. 키를 누르면 타건음이 납니다.
 
 ![일본어 변환 후보에 전각 パーティー와 반각 ﾊﾟｰﾃｨｰ가 함께 표시된다.](assets/vr-conversion.png)
 
@@ -78,7 +82,7 @@ PC에 따라 **GPU(Vulkan)**가 **GPU(CUDA)**보다 빠를 수 있습니다. 두
 
 비교할 값은 **부하 측정** 버튼 아래에 있는 **최대 요청 속도**입니다. 버튼 위의 **실측** 값은 테스트 중에 관측된 초당 처리량입니다.
 
-![GPU(Vulkan)를 선택한 한국어 보정 화면. 부하 측정 버튼 아래에 최대 요청 속도가 표시된다.](assets/readme/windows-calibration-ko.png)
+![GPU(Vulkan)를 선택한 한국어 설정 화면. 부하 측정 버튼 아래에 최대 요청 속도가 표시된다.](assets/readme/windows-calibration-ko.png)
 
 ### API 및 보고 설정
 
@@ -116,4 +120,4 @@ cargo run --release --locked
 
 ViME에는 일본어 Wikipedia 입력 오류 데이터셋의 사본이 들어 있지 않습니다. 설정의 「일본어 오변환 데이터」에서 **다운로드**를 누르면 ViME가 교토대학에서 [JWTD v2](https://nlp.ist.i.kyoto-u.ac.jp/EN/index.php?JWTD)(교토대학 언어미디어 연구실, [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.ko))를 직접 받아 편집자가 고친 한자어를 집계합니다. 남는 것은 그 단어 표뿐이며 `%LOCALAPPDATA%\ViME\misconversions.tsv`에 저장됩니다. 이 표는 공유되지 않고 CC BY-SA 3.0 그대로입니다. Tanaka, Murawaki, Kawahara, Kurohashi, NLP 2021. [JWTD v2 논문](https://www.anlp.jp/proceedings/annual_meeting/2021/pdf_dir/E8-3.pdf)
 
-타건음은 unicaegames의 [Keyboard Soundpack #1](https://opengameart.org/node/122745)([CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/))을 사용합니다. 로컬 추론에는 [llama.cpp](https://github.com/ggml-org/llama.cpp)와 [Liquid AI의 d1-2B Q4_K_M](https://huggingface.co/LiquidAI/d1-2B-GGUF)을 사용합니다.
+타건음은 unicaegames의 [Keyboard Soundpack #1](https://opengameart.org/node/122745)([CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/))을 사용합니다. 키보드 아이콘은 MUI를 통해 제공되는 Google의 [Material Icons](https://mui.com/material-ui/material-icons/)([Apache License 2.0](LICENSE))를 사용합니다. 로컬 추론에는 [llama.cpp](https://github.com/ggml-org/llama.cpp)와 [Liquid AI의 d1-2B Q4_K_M](https://huggingface.co/LiquidAI/d1-2B-GGUF)을 사용합니다.

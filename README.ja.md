@@ -8,12 +8,12 @@ ViMEは、VR内で日本語・英語・韓国語を入力できる、Windows向�
 
 [English](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-![ViMEのVRキーボード。「こんにちは、ViMEです。」と入力した状態で、上部に言語切り替え、左下に絵文字ボタンがある。](assets/vr-keyboard.png)
+![ViMEのVRキーボード。「こんにちは、ViMEです。」と入力した状態で、上部に言語切り替えとテーマ切り替え、入力欄の横に送信・コピー・貼り付けボタン、左下に絵文字ボタンがある。](assets/vr-keyboard.png)
 
 <details>
 <summary>Windows 版のキーボードプレビュー</summary>
 
-![SteamVR に接続した Windows 版 ViME の日本語 JIS キーボードプレビュー。](assets/readme/windows-keyboard-ja.png)
+![SteamVR に接続する前の Windows 版 ViME の日本語 JIS キーボードプレビュー。](assets/readme/windows-keyboard-ja.png)
 
 </details>
 
@@ -37,28 +37,32 @@ MSIが見つからない場合は、[ソースから起動する](#ソースか�
 1. ViME を手動で起動し、SteamVR に一度接続してオーバーレイを登録します。
 2. SteamVR の **設定 → スタートアップ／シャットダウン → スタートアップオーバーレイアプリを選択**で **ViME** をオンにします。SteamVR から自動起動した ViME は、ウィンドウを表示せずに Windows の通知領域（システムトレイ）に常駐します。
 
-ViME のウィンドウを閉じても通知領域に常駐し、VR キーボードを引き続き使えます。Windows の画面を開くには、アイコンをクリックするか、右クリックして **ウィンドウを開く**を選びます。アプリを終了するには、アイコンを右クリックして **ViME を終了**を選びます。
+ViME のウィンドウを閉じても通知領域に常駐し、VR キーボードを引き続き使えます。Windows の画面を開くには、アイコンをクリックするか、右クリックして **ウィンドウを開く**を選びます。アプリを終了するには、アイコンを右クリックして **ViME を終了**を選びます。ViME がすでに起動している場合は、スタートメニューからもう一度起動しても2つ目は開かず、起動中のウィンドウが前面に表示されます。
 
 ## VRChatに送る
 
 1. VRChatのAction Menuで **OSC → Enabled** をオンにします。ViMEの送信先は既定の **VRChat OSC** を使用します。
 2. **右スティック押し込み**（Vive Wandは**右トラックパッド押し込み**）か、PCの **Ctrl+Shift+F8** でキーボードを開きます。左右どちらのコントローラーでも、キーを指してトリガーを押すと入力できます。
-3. 文章を入力し、キーボードの **Enter** でChatboxに送ります。変換中は1回目の **Enter** で文字を確定し、もう一度押すと送信します。
+3. 文章を入力し、キーボードの **Enter** または送信ボタンでChatboxに送ります。変換中は1回目の **Enter** で文字を確定し、もう一度押すと送信します。
 
-左右のポインターは別々に描画され、SteamVR のフレームに合わせて更新されます。キーボードの表示が変わらない間も、コントローラーの動きに追従します。
+入力欄の横の **×** で文字を消去できます。コピーと貼り付けのボタンはWindowsのクリップボードを使います。貼り付け後にVRChatの上限である144文字を超える場合は貼り付けられません。キーボード上部の太陽・月のボタンで、ダークとライトのテーマを切り替えられます。
+
+左右のポインターは別々に描画され、SteamVR のフレームに合わせて更新されます。キーボードの表示が変わらない間も、コントローラーの動きに追従します。キーボードは高い画素密度で描画されるため、文字がくっきり表示されます。
 
 **OSCQuery で自動検出**を使うと、同じ PC で動く VRChat の受信用 UDP ポートを検出できます。新規設定では既定でオンです。v1.0.0 で保存した設定を引き継ぐ場合は、**設定**で自動検出をオンにして保存してください。自動検出がオフ、またはポートを検出できない間は、設定済みの UDP ポート（既定は `9000`）を使います。 [VRChatのOSCQuery公式ガイド](https://docs.vrchat.com/docs/oscquery)
 
 SteamVRダッシュボードの **ViME** タブからも、キーボード、送信設定、コントローラーの割り当てを開けます。
 
-Windows画面の **設定** では、OSCの通知音、開閉ショートカット、VRキーボードの幅を変更できます。設定は `%LOCALAPPDATA%\ViME\settings.json` に保存されます。
+Windows画面の **設定** では、OSCの通知音、開閉ショートカット、VRキーボードの幅、キーボードのテーマ（**ダーク**または**ライト**）を変更できます。テーマはVRキーボードとWindows画面の両方に反映されます。設定は `%LOCALAPPDATA%\ViME\settings.json` に保存されます。
+
+Windowsに Noto Sans JP がインストールされている場合は、その書体を使います。ない場合は Segoe UI と、Windowsの日本語・韓国語のシステムフォントで代替します。
 
 ## 言語の切り替えと変換
 
 - **日本語**はJIS配列でローマ字入力できます。スペースキーの **変換** で漢字やカタカナの候補が出ます。数字と英字は半角のまま、記号は全角で、`,` は `、`、`.` は `。` になります。記号とカタカナの半角表記も変換候補から選べます。**半/全** は半角の直接入力への切り替えです。
 - **English** はQWERTY、**한국어** は두벌식（2ボル式）です。韓国語の **한/영** で英数字の直接入力に切り替えられます。
 - **左下の 😃** で絵文字・顔文字・記号の一覧を開きます。英語入力では `:cat:` のような短縮名からも絵文字を選べます。
-- 日本語の未確定入力では、**Backspace** を押すと表示上の1文字を削除します。たとえば `きゃ` は `き` になります。**Backspace** と **Space** は押し続けると連続入力できます。キーを押すと打鍵音が鳴ります。
+- 日本語の未確定入力では、**Backspace** を押すと表示上の1文字を削除します。たとえば `きゃ` は `き` になります。入力途中のローマ字は **Backspace** のあとも編集できるため、打ち間違えた文字を直して同じ音を入力し直せます。`kyi`、`swa`、`tsa`、`fwa`、`qa`、`xn` などの綴りにも対応しています。**Backspace** と **Space** は押し続けると連続入力できます。キーを押すと打鍵音が鳴ります。
 
 ![日本語の変換欄に、全角の「パーティー」と半角の「ﾊﾟｰﾃｨｰ」が並ぶ。](assets/vr-conversion.png)
 
@@ -78,7 +82,7 @@ PCの構成によっては **GPU（Vulkan）** が **GPU（CUDA）** より速�
 
 比較する値は、**負荷を測定** ボタンの下にある **最大送信レート** です。ボタン上の **実測** は、測定中に観測した処理件数を req/s で表示します。
 
-![GPU（Vulkan）を選択した日本語のキャリブレーション画面。負荷を測定ボタンの下に最大送信レートが表示されている。](assets/readme/windows-calibration-ja.png)
+![GPU（Vulkan）を選択した日本語の設定画面。負荷を測定ボタンの下に最大送信レートが表示されている。](assets/readme/windows-calibration-ja.png)
 
 ### API と報告の設定
 
@@ -116,4 +120,4 @@ cargo run --release --locked
 
 ViME には日本語Wikipedia入力誤りデータセットの複製は含まれません。設定の「日本語の誤変換データ」で **ダウンロード** を押すと、ViME が京都大学から [JWTD v2](https://nlp.ist.i.kyoto-u.ac.jp/EN/index.php?JWTD)（京都大学 言語メディア研究室、[CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.ja)）を直接取得し、編集者が直した漢字の語を集計します。残るのはその語の表だけで、`%LOCALAPPDATA%\ViME\misconversions.tsv` に保存されます。この表は共有されず、CC BY-SA 3.0 のままです。田中佑、村脇有吾、河原大輔、黒橋禎夫。言語処理学会第27回年次大会、2021年。[JWTD v2 の論文](https://www.anlp.jp/proceedings/annual_meeting/2021/pdf_dir/E8-3.pdf)
 
-打鍵音は unicaegames の [Keyboard Soundpack #1](https://opengameart.org/node/122745)（[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)）を使用しています。ローカル推論には [llama.cpp](https://github.com/ggml-org/llama.cpp) と [Liquid AI の d1-2B Q4_K_M](https://huggingface.co/LiquidAI/d1-2B-GGUF) を使用します。
+打鍵音は unicaegames の [Keyboard Soundpack #1](https://opengameart.org/node/122745)（[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)）を使用しています。キーボードのアイコンは、MUI 経由で Google の [Material Icons](https://mui.com/material-ui/material-icons/)（[Apache License 2.0](LICENSE)）を使用しています。ローカル推論には [llama.cpp](https://github.com/ggml-org/llama.cpp) と [Liquid AI の d1-2B Q4_K_M](https://huggingface.co/LiquidAI/d1-2B-GGUF) を使用します。

@@ -313,7 +313,11 @@ pub fn choice<T: PartialEq>(
 /// The accent-colored button for the main action of a page.
 pub fn primary<'a>(context: &Context, label: &str) -> Button<'a> {
     let palette = Palette::of(context);
-    Button::new(RichText::new(label.to_owned()).color(palette.on_accent).strong())
-        .fill(palette.accent)
-        .stroke(Stroke::NONE)
+    Button::new(
+        RichText::new(label.to_owned())
+            .color(palette.on_accent)
+            .strong(),
+    )
+    .fill(palette.accent)
+    .stroke(Stroke::NONE)
 }

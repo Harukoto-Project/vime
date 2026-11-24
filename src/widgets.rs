@@ -73,8 +73,7 @@ pub fn checkbox(ui: &mut Ui, checked: &mut bool, text: impl Into<WidgetText>) ->
     let response = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.;
-            let (rect, mut response) =
-                ui.allocate_exact_size(vec2(BOX, BOX), Sense::click());
+            let (rect, mut response) = ui.allocate_exact_size(vec2(BOX, BOX), Sense::click());
             let label = ui.add(egui::Label::new(text).sense(Sense::click()));
             response |= label;
             if response.clicked() {
@@ -108,9 +107,8 @@ pub fn checkbox(ui: &mut Ui, checked: &mut bool, text: impl Into<WidgetText>) ->
         })
         .inner;
     let enabled = ui.is_enabled();
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, *checked, "")
-    });
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, *checked, ""));
     response
 }
 
@@ -125,8 +123,7 @@ pub fn radio<T: PartialEq>(
     let mut response = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.;
-            let (rect, mut response) =
-                ui.allocate_exact_size(vec2(BOX, BOX), Sense::click());
+            let (rect, mut response) = ui.allocate_exact_size(vec2(BOX, BOX), Sense::click());
             let label = ui.add(egui::Label::new(text).sense(Sense::click()));
             response |= label;
             let tone = tone(ui, &response, false);
@@ -159,9 +156,8 @@ pub fn radio<T: PartialEq>(
         response.mark_changed();
     }
     let enabled = ui.is_enabled();
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::RadioButton, enabled, selected, "")
-    });
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, enabled, selected, ""));
     response
 }
 
@@ -257,7 +253,9 @@ impl<N: Numeric> Widget for Slider<'_, N> {
             if let Some(pointer) = response.interact_pointer_pos()
                 && (response.dragged() || response.is_pointer_button_down_on())
             {
-                next = from_ratio(f64::from((pointer.x - area.left() - HANDLE_RADIUS) / travel));
+                next = from_ratio(f64::from(
+                    (pointer.x - area.left() - HANDLE_RADIUS) / travel,
+                ));
             }
             if response.has_focus() {
                 let step = if N::INTEGRAL {
@@ -310,13 +308,13 @@ impl<N: Numeric> Widget for Slider<'_, N> {
             if enabled && (response.hovered() || response.dragged()) {
                 painter.circle_filled(center, HANDLE_RADIUS + 5., accent.gamma_multiply(0.22));
             }
-            painter.circle(
-                center,
-                HANDLE_RADIUS,
-                accent,
-                Stroke::new(2., palette.key),
+            painter.circle(center, HANDLE_RADIUS, accent, Stroke::new(2., palette.key));
+            focus_ring(
+                ui,
+                &response,
+                Rect::from_center_size(center, vec2(14., 14.)),
+                7.,
             );
-            focus_ring(ui, &response, Rect::from_center_size(center, vec2(14., 14.)), 7.);
             if enabled && response.hovered() {
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
@@ -350,7 +348,11 @@ pub fn number_field(ui: &mut Ui, field: DragValue<'_>) -> Response {
     let palette = Palette::of(ui.ctx());
     ui.scope(|ui| {
         let visuals = &mut ui.visuals_mut().widgets;
-        for state in [&mut visuals.inactive, &mut visuals.hovered, &mut visuals.active] {
+        for state in [
+            &mut visuals.inactive,
+            &mut visuals.hovered,
+            &mut visuals.active,
+        ] {
             state.weak_bg_fill = palette.input;
             state.bg_fill = palette.input;
         }
@@ -453,12 +455,28 @@ mod tests {
 
             click(&context, &mut state, check.left_center() + vec2(9., 0.));
             assert!(state.checked, "{theme:?} checkbox");
-            click(&context, &mut state, radio_rect.left_center() + vec2(9., 0.));
+            click(
+                &context,
+                &mut state,
+                radio_rect.left_center() + vec2(9., 0.),
+            );
             assert_eq!(state.device, 2, "{theme:?} radio");
-            click(&context, &mut state, pos2(slider.left() + 48., slider.center().y));
-            assert!(state.width > 0.65 && state.width < 1.65, "{theme:?} slider {}", state.width);
+            click(
+                &context,
+                &mut state,
+                pos2(slider.left() + 48., slider.center().y),
+            );
+            assert!(
+                state.width > 0.65 && state.width < 1.65,
+                "{theme:?} slider {}",
+                state.width
+            );
             let before = state.rate;
-            click(&context, &mut state, pos2(log.left() + 108., log.center().y));
+            click(
+                &context,
+                &mut state,
+                pos2(log.left() + 108., log.center().y),
+            );
             assert!(state.rate > before, "{theme:?} log slider {}", state.rate);
         }
     }

@@ -3,13 +3,13 @@ use crate::{
     hotkeys::Hotkeys,
     keyboard::{self, Action, CalibrationJob, Keyboard, Repeater, VrKeys, palette::Palette},
     overlay_surface::OverlaySurface,
-    widgets,
     power,
     tray::Tray,
+    widgets,
 };
 use eframe::egui::{
-    self, Align, Button, FontData, FontDefinitions, FontFamily, Frame, Layout, Margin,
-    RichText, ScrollArea, Stroke, Ui, ViewportBuilder,
+    self, Align, Button, FontData, FontDefinitions, FontFamily, Frame, Layout, Margin, RichText,
+    ScrollArea, Stroke, Ui, ViewportBuilder,
 };
 use std::{
     collections::HashMap,
@@ -846,7 +846,11 @@ impl App {
             );
             ui.add_space(5.);
             if self.settings_error {
-                ui.label(RichText::new(&self.settings_message).small().color(ui.visuals().error_fg_color));
+                ui.label(
+                    RichText::new(&self.settings_message)
+                        .small()
+                        .color(ui.visuals().error_fg_color),
+                );
                 // Another app may hold the shortcut, and Settings is out of reach here.
                 ui.label(tr("Windows 開閉ショートカット"));
                 ui.add(
@@ -1033,7 +1037,10 @@ impl App {
             );
             ui.horizontal_wrapped(|ui| {
                 ui.label(dashboard::osc_port_label(&self.draft));
-                widgets::number_field(ui, egui::DragValue::new(&mut self.draft.osc_port).range(1..=65535));
+                widgets::number_field(
+                    ui,
+                    egui::DragValue::new(&mut self.draft.osc_port).range(1..=65535),
+                );
                 widgets::checkbox(ui, &mut self.draft.osc_notify, tr("チャット通知音"));
             });
             tr("VRChat側でOSCを有効にしてください")

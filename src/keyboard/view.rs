@@ -214,7 +214,10 @@ impl Board<'_> {
         );
         self.label(
             Rect::from_min_max(
-                Pos2::new(logo.right() + 6. * self.scale, logo.bottom() - 18. * self.scale),
+                Pos2::new(
+                    logo.right() + 6. * self.scale,
+                    logo.bottom() - 18. * self.scale,
+                ),
                 Pos2::new(logo.right() + 60. * self.scale, logo.bottom()),
             ),
             Align2::LEFT_CENTER,
@@ -275,7 +278,10 @@ impl Board<'_> {
             for index in 0..8 {
                 let direction = Vec2::angled(index as f32 * std::f32::consts::FRAC_PI_4);
                 painter.line_segment(
-                    [center + direction * 8.5 * unit, center + direction * 11. * unit],
+                    [
+                        center + direction * 8.5 * unit,
+                        center + direction * 11. * unit,
+                    ],
                     Stroke::new(2. * unit, ink),
                 );
             }

@@ -1,3 +1,4 @@
+use crate::keyboard::palette::Palette;
 use eframe::{
     egui::{self, Event, FontDefinitions, Pos2, RawInput, Rect, Ui, Vec2},
     glow::{self, HasContext},
@@ -7,7 +8,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use crate::keyboard::palette::Palette;
 use vime::i18n::tr;
 
 const RETRY_DELAY: Duration = Duration::from_millis(250);
