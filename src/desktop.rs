@@ -1787,18 +1787,38 @@ fn windows_fonts() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     if let Some(windows) = env::var_os("WINDIR") {
         let folder = PathBuf::from(windows).join("Fonts");
-        // Segoe UI for Latin text, then the UI variants of the Japanese and
-        // Korean system fonts, like most Windows apps. They go in front of
-        // egui's bundled fonts, which stay behind as a last fallback.
+        // Noto Sans JP for Japanese and Latin text alike, so the keys and the
+        // window share one typeface. Segoe UI and the UI variants of the other
+        // Japanese and Korean system fonts stay behind it for machines without
+        // Noto and for scripts it lacks. They go in front of egui's bundled
+        // fonts, which stay behind as a last fallback.
+        let user_folder = env::var_os("LOCALAPPDATA")
+            .map(|local| PathBuf::from(local).join("Microsoft/Windows/Fonts"));
         let mut front = 0;
         for (name, file, index) in [
+            ("noto-sans-jp", "NotoSansJP-VF.ttf", 0),
             ("segoe-ui", "segoeui.ttf", 0),
             ("yu-gothic-ui", "YuGothR.ttc", 1),
             ("meiryo-ui", "meiryo.ttc", 1),
             ("malgun", "malgun.ttf", 0),
             ("symbols", "seguisym.ttf", 0),
         ] {
-            if let Some(data) = read_font(&folder, file, index) {
+            // Fonts installed for one user live outside the Windows folder.
+            let data = read_font(&folder, file, index).or_else(|| {
+                user_folder
+                    .as_deref()
+                    .and_then(|user| read_font(user, file, index))
+            });
+            let data = data.map(|mut data| {
+                if name == "noto-sans-jp" {
+                    // The variable font's default instance is lighter than
+                    // Regular, so ask for the Regular weight explicitly.
+                    Arc::make_mut(&mut data).tweak.coords =
+                        egui::epaint::text::VariationCoords::new([("wght", 400.)]);
+                }
+                data
+            });
+            if let Some(data) = data {
                 fonts.font_data.insert(name.to_owned(), data);
                 fonts
                     .families
