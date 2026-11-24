@@ -200,12 +200,27 @@ impl Board<'_> {
     }
 
     fn header(&mut self, keyboard: &Keyboard, can_close: bool) {
-        self.label(
-            self.box_at(22., 15., 130., 40.),
-            Align2::LEFT_CENTER,
-            "ViME",
-            26.,
+        let texture = vime::brand::wordmark_texture(self.ui);
+        let size = texture.size_vec2();
+        let logo = Rect::from_min_size(
+            self.box_at(22., 15., 0., 40.).left_center() - Vec2::new(0., 14. * self.scale),
+            size * (28. * self.scale / size.y),
+        );
+        self.ui.painter().image(
+            texture.id(),
+            logo,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
             self.palette.ink,
+        );
+        self.label(
+            Rect::from_min_max(
+                Pos2::new(logo.right() + 6. * self.scale, logo.bottom() - 18. * self.scale),
+                Pos2::new(logo.right() + 60. * self.scale, logo.bottom()),
+            ),
+            Align2::LEFT_CENTER,
+            vime::update::VERSION_LABEL,
+            12.,
+            self.palette.secondary,
         );
         let track = self.box_at(256., 15., 348., 40.);
         self.ui
@@ -232,6 +247,42 @@ impl Board<'_> {
                 Face::Key,
                 Action::Close,
             );
+        }
+        // The theme switch is the right-most control; the close button, which
+        // only exists in VR, sits to its right.
+        let x = if can_close { 712. } else { 797. };
+        self.theme_button(self.box_at(x, 15., 48., 40.));
+    }
+
+    /// Shows what a press switches to: the sun in the dark theme, the moon in
+    /// the light one.
+    fn theme_button(&mut self, rect: Rect) {
+        let (hovered, pressed) =
+            self.button_interaction(rect, tr("テーマを切り替え"), true, Action::ToggleTheme);
+        let (fill, border, ink) = Face::Key.colors(self.palette, hovered, pressed);
+        let painter = self.ui.painter();
+        painter.rect(
+            rect,
+            8. * self.scale,
+            fill,
+            Stroke::new(self.scale, border),
+            StrokeKind::Inside,
+        );
+        let center = rect.center();
+        let unit = self.scale;
+        if self.palette.dark {
+            painter.circle_filled(center, 5. * unit, ink);
+            for index in 0..8 {
+                let direction = Vec2::angled(index as f32 * std::f32::consts::FRAC_PI_4);
+                painter.line_segment(
+                    [center + direction * 8.5 * unit, center + direction * 11. * unit],
+                    Stroke::new(2. * unit, ink),
+                );
+            }
+        } else {
+            // A crescent: the moon with a bite taken out in the key's own color.
+            painter.circle_filled(center, 9. * unit, ink);
+            painter.circle_filled(center + Vec2::new(5., -4.) * unit, 8. * unit, fill);
         }
     }
 

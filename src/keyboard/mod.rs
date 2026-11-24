@@ -46,6 +46,7 @@ pub enum Action {
     Clear,
     Enter,
     Close,
+    ToggleTheme,
 }
 
 impl Action {
@@ -357,7 +358,8 @@ impl Keyboard {
             | Action::Paste
             | Action::Send
             | Action::Enter
-            | Action::Close => {}
+            | Action::Close
+            | Action::ToggleTheme => {}
         }
         if let Some(snapshot) = snapshot
             && let Some(typo) = &mut self.typo

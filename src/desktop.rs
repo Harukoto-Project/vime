@@ -125,6 +125,9 @@ struct App {
     /// Held-key repeat for the desktop window and the VR dashboard.
     repeaters: [Repeater; 2],
     world_repeaters: [Repeater; 2],
+    /// The keyboard's theme button was pressed; applied in `logic`, which has
+    /// the egui context.
+    theme_toggle: bool,
 }
 
 const DESKTOP: usize = 0;
@@ -256,6 +259,7 @@ impl App {
             calibration_check: Instant::now(),
             repeaters: Default::default(),
             world_repeaters: Default::default(),
+            theme_toggle: false,
         })
     }
 
@@ -485,8 +489,26 @@ impl App {
                     Err(error) => self.keyboard.status(error.to_string()),
                 }
             }
+            Action::ToggleTheme => self.theme_toggle = true,
             action => self.keyboard.apply(action),
         }
+    }
+
+    /// Switches the theme from the keyboard's button and saves it right away,
+    /// without touching other unsaved edits in the draft.
+    fn toggle_theme(&mut self, context: &egui::Context) {
+        let mut saved = self.settings.clone();
+        saved.keyboard_theme = saved.keyboard_theme.toggled();
+        if let Err(error) = saved.save(&self.directory) {
+            self.settings_error = true;
+            self.settings_message = tr_args("設定を保存できません ({0})", &[&error.to_string()]);
+            self.dashboard.redraw = true;
+            return;
+        }
+        self.settings.keyboard_theme = saved.keyboard_theme;
+        self.draft.keyboard_theme = saved.keyboard_theme;
+        self.dashboard.redraw = true;
+        self.apply_theme(context);
     }
 
     fn world_frame(&self, caret_visible: bool) -> WorldFrame {
@@ -1657,6 +1679,10 @@ impl eframe::App for App {
                 context.request_repaint_after(delay);
             }
         }
+        // A press from a VR controller or the dashboard repaints in this frame.
+        if std::mem::take(&mut self.theme_toggle) {
+            self.toggle_theme(context);
+        }
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
@@ -1666,6 +1692,10 @@ impl eframe::App for App {
             && ui.input(|input| input.viewport().minimized != Some(true))
         {
             self.desktop_ui(ui);
+        }
+        // A click on the desktop window's keyboard.
+        if std::mem::take(&mut self.theme_toggle) {
+            self.toggle_theme(ui.ctx());
         }
         let now = Instant::now();
         self.schedule_vr_deadlines(ui.ctx(), now);

@@ -316,6 +316,13 @@ pub enum KeyboardTheme {
 impl KeyboardTheme {
     pub const ALL: [Self; 2] = [Self::Light, Self::Dark];
 
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Light => Self::Dark,
+            Self::Dark => Self::Light,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Light => tr("ライト"),
