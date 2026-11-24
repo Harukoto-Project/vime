@@ -1315,7 +1315,8 @@ mod tests {
         for _ in 0..2 {
             composer.backspace();
         }
-        for key in "nichiha".chars() {
+        assert_eq!(composer.preedit(), "こ");
+        for key in "nnichiha".chars() {
             composer.key(key);
         }
         let after = Snapshot::of(&composer);

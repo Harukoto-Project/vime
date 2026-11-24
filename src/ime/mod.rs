@@ -36,6 +36,8 @@ pub struct Composer {
     language: Language,
     committed: String,
     caret: usize,
+    // Rendered Japanese preedit retained after deleting a character.
+    japanese_prefix: String,
     reading: String,
     // Set while the reading is converted. `reading` is kept to return to it.
     conversion: Option<Conversion>,
@@ -78,6 +80,24 @@ impl Composer {
         if self.conversion.take().is_some() {
             return;
         }
+        if self.language == Language::Japanese && self.has_preedit() {
+            let mut preedit = self.preedit();
+            if let Some((index, last)) = preedit.grapheme_indices(true).next_back() {
+                // Keep a pending romaji suffix editable when deletion leaves the
+                // preceding display intact.
+                if let Some(remaining) = self.reading.strip_suffix(last)
+                    && preedit[..index].strip_prefix(&self.japanese_prefix)
+                        == Some(japanese::kana(remaining, false).as_str())
+                {
+                    self.reading.truncate(remaining.len());
+                } else {
+                    preedit.truncate(index);
+                    self.japanese_prefix = preedit;
+                    self.reading.clear();
+                }
+            }
+            return;
+        }
         if self.reading.pop().is_none()
             && let Some((index, _)) = self.committed[..self.caret]
                 .grapheme_indices(true)
@@ -90,6 +110,7 @@ impl Composer {
 
     pub fn clear(&mut self) {
         self.committed.clear();
+        self.japanese_prefix.clear();
         self.reading.clear();
         self.conversion = None;
         self.caret = 0;
@@ -104,7 +125,7 @@ impl Composer {
     }
 
     pub fn has_preedit(&self) -> bool {
-        !self.reading.is_empty()
+        !self.japanese_prefix.is_empty() || !self.reading.is_empty()
     }
 
     pub fn move_caret(&mut self, display_index: usize) {
@@ -236,6 +257,7 @@ impl Composer {
             let (start, end) = (range.start - self.caret, range.end - self.caret);
             if end <= kana.len() {
                 kana.replace_range(start..end, replacement);
+                self.japanese_prefix.clear();
                 self.reading = kana;
                 return true;
             }
@@ -310,6 +332,7 @@ impl Composer {
 
     pub fn replace_preedit(&mut self, candidate: &str) {
         self.insert_committed(candidate);
+        self.japanese_prefix.clear();
         self.reading.clear();
         self.conversion = None;
     }
@@ -331,7 +354,9 @@ impl Composer {
 
     fn convert(&self, finalizing: bool) -> String {
         match self.language {
-            Language::Japanese => japanese::kana(&self.reading, finalizing),
+            Language::Japanese => {
+                self.japanese_prefix.clone() + &japanese::kana(&self.reading, finalizing)
+            }
             Language::Korean => korean::compose(&self.reading),
             Language::English => String::new(),
         }
@@ -364,6 +389,40 @@ mod tests {
         assert_eq!(composer.preedit(), "안녕하세요");
         composer.backspace();
         assert_eq!(composer.preedit(), "안녕하셍");
+    }
+
+    #[test]
+    fn backspace_removes_one_displayed_japanese_character() {
+        for (keys, remaining) in [
+            ("kana", "か"),
+            ("kya", "き"),
+            ("kitte", "きっ"),
+            ("kan.", "かん"),
+            ("nnn", "nn"),
+        ] {
+            let mut composer = Composer::default();
+            keys.chars().for_each(|key| composer.key(key));
+            composer.backspace();
+            assert_eq!(composer.preedit(), remaining, "{keys}");
+            assert!(composer.has_preedit());
+            assert_eq!(composer.committed(), "");
+        }
+
+        let mut composer = Composer::default();
+        "kashit".chars().for_each(|key| composer.key(key));
+        composer.backspace();
+        assert_eq!(composer.preedit(), "かし");
+        composer.backspace();
+        "sht".chars().for_each(|key| composer.key(key));
+        composer.backspace();
+        composer.key('i');
+        assert_eq!(composer.preedit(), "かし");
+        assert!(composer.convert_reading(&[]));
+        composer.backspace();
+        assert_eq!(composer.preedit(), "かし");
+        composer.backspace();
+        composer.backspace();
+        assert!(!composer.has_preedit());
     }
 
     #[test]
