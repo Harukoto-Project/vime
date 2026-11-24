@@ -25,7 +25,8 @@ $manifest = Join-Path $steamvr.FullName 'vime.vrmanifest'
 $powerShell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
 
 foreach ($version in '1.0.0', '1.1.0') {
-    $legacy = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "ViME [$version] 更新")
+    # The Windows inbox tar used by the legacy updater uses the runner's code page.
+    $legacy = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "ViME [$version]")
     $oldExe = Join-Path $legacy.FullName 'vime.exe'
     'old executable fixture' | Set-Content -LiteralPath $oldExe
     $personalFile = Join-Path $legacy.FullName 'personal.txt'
