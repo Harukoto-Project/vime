@@ -1,6 +1,6 @@
 mod icons;
 mod microsoft_ime;
-mod palette;
+pub(crate) mod palette;
 mod sound;
 mod spellcheck;
 mod typo;

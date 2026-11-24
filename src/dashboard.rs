@@ -1,8 +1,11 @@
 use crate::{
-    keyboard::{self, Action, Keyboard},
+    keyboard::{self, Action, Keyboard, palette::Palette},
     overlay_surface::{cancel_pointer, pointer_button},
+    widgets,
 };
-use eframe::egui::{self, Color32, Event, Frame, Margin, Pos2, RichText, Stroke, Ui};
+use eframe::egui::{
+    self, Button, Context, Event, Frame, Margin, Pos2, Response, RichText, Stroke, Ui, WidgetText,
+};
 use vime::{
     brand,
     i18n::{Lang, tr, tr_args},
@@ -24,8 +27,8 @@ pub enum Page {
 impl Page {
     pub fn tabs(page: &mut Self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            ui.selectable_value(page, Self::Keyboard, tr("キーボード"));
-            ui.selectable_value(page, Self::Settings, tr("設定"));
+            choice(ui, page, Self::Keyboard, tr("キーボード"));
+            choice(ui, page, Self::Settings, tr("設定"));
         });
     }
 }
@@ -127,7 +130,7 @@ impl Dashboard {
         let mut held = None;
         let old_page = self.page;
         Frame::new()
-            .fill(Color32::from_rgb(27, 37, 51))
+            .fill(Palette::of(ui.ctx()).panel)
             .inner_margin(Margin::symmetric(32, 21))
             .show(ui, |ui| {
                 ui.set_min_size(egui::vec2(SIZE[0] as f32 - 64., SIZE[1] as f32 - 42.));
@@ -197,7 +200,7 @@ fn settings(
                     }
                 }
             });
-            output.checkbox(&mut draft.osc_notify, tr("チャット通知音"));
+            widgets::checkbox(output, &mut draft.osc_notify, tr("チャット通知音"));
         } else {
             output.label(tr("VRアプリの入力欄を開き、Windows で前面にします"));
         }
@@ -215,7 +218,7 @@ fn settings(
         }
         controls.add_space(10.);
         controls.label(tr("キーボード幅"));
-        controls.add(egui::Slider::new(&mut draft.overlay_width, 0.65..=1.65).suffix(" m"));
+        controls.add(widgets::Slider::new(&mut draft.overlay_width, 0.65..=1.65).suffix(" m"));
         controls.label(tr_args("Windows の開閉キー  {0}", &[&applied.hotkey]));
         keyboard_theme_options(controls, &mut draft.keyboard_theme);
         controls.add_space(10.);
@@ -226,13 +229,7 @@ fn settings(
     ui.separator();
     ui.add_space(10.);
     ui.horizontal(|ui| {
-        let save = egui::Button::new(
-            RichText::new(tr("設定を保存"))
-                .color(Color32::from_rgb(17, 36, 53))
-                .strong(),
-        )
-        .fill(Color32::from_rgb(165, 216, 255))
-        .stroke(Stroke::NONE);
+        let save = primary(ui.ctx(), tr("設定を保存"));
         if ui.add_enabled(draft != applied, save).clicked() {
             command = Some(Command::SaveSettings);
         }
@@ -246,8 +243,9 @@ fn settings(
 
 pub fn destination_options(ui: &mut Ui, destination: &mut Destination) {
     ui.horizontal_wrapped(|ui| {
-        ui.selectable_value(destination, Destination::Osc, Destination::Osc.label());
-        ui.selectable_value(
+        choice(ui, destination, Destination::Osc, Destination::Osc.label());
+        choice(
+            ui,
             destination,
             Destination::SteamVrInput,
             Destination::SteamVrInput.label(),
@@ -259,14 +257,14 @@ pub fn keyboard_theme_options(ui: &mut Ui, theme: &mut KeyboardTheme) {
     ui.horizontal_wrapped(|ui| {
         ui.label(tr("キーボードのテーマ"));
         for option in KeyboardTheme::ALL {
-            ui.selectable_value(theme, option, option.label());
+            choice(ui, theme, option, option.label());
         }
     });
 }
 
 pub fn osc_query_option(ui: &mut Ui, draft: &mut Settings, port: Option<u16>) {
     ui.horizontal_wrapped(|ui| {
-        ui.checkbox(&mut draft.osc_query, tr("OSCQuery で自動検出"));
+        widgets::checkbox(ui, &mut draft.osc_query, tr("OSCQuery で自動検出"));
         if draft.osc_query
             && let Some(port) = port
         {
@@ -286,7 +284,36 @@ pub fn osc_port_label(draft: &Settings) -> &'static str {
 pub fn language_options(ui: &mut Ui, language: &mut Lang) {
     ui.horizontal_wrapped(|ui| {
         for option in Lang::ALL {
-            ui.selectable_value(language, option, option.name());
+            choice(ui, language, option, option.name());
         }
     });
+}
+
+/// A toggle button for picking one of several values; the chosen one is tinted
+/// and outlined like the selected keys of the keyboard.
+pub fn choice<T: PartialEq>(
+    ui: &mut Ui,
+    current: &mut T,
+    value: T,
+    text: impl Into<WidgetText>,
+) -> Response {
+    let selected = *current == value;
+    let mut button = Button::selectable(selected, text.into());
+    if selected {
+        button = button.stroke(Stroke::new(1., Palette::of(ui.ctx()).selected_border));
+    }
+    let mut response = ui.add(button);
+    if response.clicked() && !selected {
+        *current = value;
+        response.mark_changed();
+    }
+    response
+}
+
+/// The accent-colored button for the main action of a page.
+pub fn primary<'a>(context: &Context, label: &str) -> Button<'a> {
+    let palette = Palette::of(context);
+    Button::new(RichText::new(label.to_owned()).color(palette.on_accent).strong())
+        .fill(palette.accent)
+        .stroke(Stroke::NONE)
 }

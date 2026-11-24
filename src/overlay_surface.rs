@@ -1,5 +1,5 @@
 use eframe::{
-    egui::{self, Event, FontDefinitions, Pos2, RawInput, Rect, Ui, Vec2, Visuals},
+    egui::{self, Event, FontDefinitions, Pos2, RawInput, Rect, Ui, Vec2},
     glow::{self, HasContext},
 };
 use std::{
@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use crate::keyboard::palette::Palette;
 use vime::i18n::tr;
 
 const RETRY_DELAY: Duration = Duration::from_millis(250);
@@ -40,7 +41,7 @@ impl OverlaySurface {
     pub fn new(
         gl: Arc<glow::Context>,
         fonts: FontDefinitions,
-        visuals: Visuals,
+        palette: &'static Palette,
         logical_size: [u32; 2],
         pixels_per_point: f32,
     ) -> Result<Self, String> {
@@ -56,7 +57,7 @@ impl OverlaySurface {
         };
         let context = egui::Context::default();
         context.set_fonts(fonts);
-        context.set_visuals(visuals);
+        palette.install(&context);
         context.options_mut(|options| {
             options.max_passes = std::num::NonZeroUsize::MIN;
             // Hand-held dashboard rays move slightly while a trigger is squeezed.
@@ -73,6 +74,10 @@ impl OverlaySurface {
             pending: false,
             retry_after: None,
         })
+    }
+
+    pub fn context(&self) -> &egui::Context {
+        &self.context
     }
 
     pub fn render<T>(&mut self, events: Vec<Event>, mut draw: impl FnMut(&mut Ui) -> T) -> T {

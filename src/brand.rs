@@ -43,7 +43,14 @@ pub fn wordmark(ui: &mut Ui, height: f32) {
         Layout::left_to_right(Align::Max),
         |ui| {
             ui.spacing_mut().item_spacing.x = 5.;
-            ui.add(Image::new((texture.id(), size * (height / size.y))).alt_text("ViME"));
+            // The bitmap is light; tint it with the theme's text color so that it
+            // also reads on a light background.
+            let tint = ui.visuals().widgets.noninteractive.fg_stroke.color;
+            ui.add(
+                Image::new((texture.id(), size * (height / size.y)))
+                    .tint(tint)
+                    .alt_text("ViME"),
+            );
             ui.add(
                 eframe::egui::Label::new(RichText::new(VERSION_LABEL).size(10.).weak()).extend(),
             );

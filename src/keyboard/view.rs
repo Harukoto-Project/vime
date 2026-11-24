@@ -766,9 +766,12 @@ impl Board<'_> {
     }
 
     fn jis_enter(&mut self, face: Face) {
-        let mut top = self.jis_rect(1, 13.5, 1.5);
-        let bottom = self.jis_rect(2, 13.75, 1.25);
-        top.max.y = bottom.min.y;
+        let top = self.jis_rect(1, 13.5, 1.5);
+        // The step of the L sits at the bottom of the upper row, so it keeps the
+        // same gap to the keys beside it as every other key. The lower part
+        // spans both rows to leave no dead zone between the two.
+        let mut bottom = self.jis_rect(2, 13.75, 1.25);
+        bottom.min.y = top.min.y;
         let enabled = !matches!(face, Face::Disabled);
         let label = Icon::Enter.label();
         let (top_hover, top_press) = self.button_interaction(top, label, enabled, Action::Enter);
@@ -788,7 +791,7 @@ impl Board<'_> {
                 top.right_top(),
                 bottom.right_bottom(),
                 bottom.left_bottom(),
-                bottom.left_top(),
+                Pos2::new(bottom.min.x, top.max.y),
                 top.left_bottom(),
             ],
             8. * self.scale,

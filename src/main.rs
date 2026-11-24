@@ -16,6 +16,8 @@ mod power;
 mod single_instance;
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod tray;
+#[cfg(all(windows, target_arch = "x86_64"))]
+mod widgets;
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 fn main() -> eframe::Result {

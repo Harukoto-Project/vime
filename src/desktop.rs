@@ -1,13 +1,14 @@
 use crate::{
     dashboard::{self, Command, Dashboard},
     hotkeys::Hotkeys,
-    keyboard::{self, Action, CalibrationJob, Keyboard, Repeater, VrKeys},
+    keyboard::{self, Action, CalibrationJob, Keyboard, Repeater, VrKeys, palette::Palette},
     overlay_surface::OverlaySurface,
+    widgets,
     power,
     tray::Tray,
 };
 use eframe::egui::{
-    self, Align, Button, Color32, FontData, FontDefinitions, FontFamily, Frame, Layout, Margin,
+    self, Align, Button, FontData, FontDefinitions, FontFamily, Frame, Layout, Margin,
     RichText, ScrollArea, Stroke, Ui, ViewportBuilder,
 };
 use std::{
@@ -30,13 +31,6 @@ use vime::{
     update::{self, Update},
 };
 
-const BACKGROUND: Color32 = Color32::from_rgb(20, 26, 35);
-const PANEL: Color32 = Color32::from_rgb(29, 37, 49);
-const EDGE: Color32 = Color32::from_rgb(53, 67, 83);
-const INK: Color32 = Color32::from_rgb(241, 245, 251);
-const SECONDARY: Color32 = Color32::from_rgb(176, 192, 209);
-const ACCENT: Color32 = Color32::from_rgb(159, 211, 255);
-const ERROR: Color32 = Color32::from_rgb(255, 177, 168);
 const WIDE_LAYOUT: f32 = 640.;
 const MAX_PAGE_WIDTH: f32 = 1080.;
 const HIDDEN_PAINT_RETRY: Duration = Duration::from_millis(50);
@@ -151,11 +145,15 @@ struct Surfaces {
 }
 
 impl Surfaces {
-    fn new(gl: Arc<eframe::glow::Context>, fonts: FontDefinitions) -> Result<Self, String> {
+    fn new(
+        gl: Arc<eframe::glow::Context>,
+        fonts: FontDefinitions,
+        palette: &'static Palette,
+    ) -> Result<Self, String> {
         // 1935 × 954 pixels at the keyboard's original 860 × 424 logical size.
         let keyboard =
-            OverlaySurface::new(gl.clone(), fonts.clone(), visuals(), keyboard::SIZE, 2.25)?;
-        match OverlaySurface::new(gl, fonts, visuals(), dashboard::SIZE, 1.0) {
+            OverlaySurface::new(gl.clone(), fonts.clone(), palette, keyboard::SIZE, 2.25)?;
+        match OverlaySurface::new(gl, fonts, palette, dashboard::SIZE, 1.0) {
             Ok(dashboard) => Ok(Self {
                 keyboard,
                 dashboard,
@@ -192,12 +190,13 @@ impl App {
 
         let fonts = windows_fonts();
         creation.egui_ctx.set_fonts(fonts.clone());
-        creation.egui_ctx.set_visuals(visuals());
+        let palette = Palette::for_theme(settings.keyboard_theme);
+        palette.install(&creation.egui_ctx);
         let surfaces = creation
             .gl
             .clone()
             .ok_or_else(|| tr("OpenGL を初期化できません").to_owned())
-            .and_then(|gl| Surfaces::new(gl, fonts));
+            .and_then(|gl| Surfaces::new(gl, fonts, palette));
         let hotkeys = match Hotkeys::new(creation.egui_ctx.clone()) {
             Ok(mut hotkeys) => {
                 match hotkeys.prepare(&settings.hotkey) {
@@ -305,8 +304,12 @@ impl App {
         self.draft = proposed;
         self.api_key_edits.clear();
         self.api_key_before_url = None;
-        self.dashboard.redraw |= self.settings.keyboard_theme != self.draft.keyboard_theme;
+        let theme_changed = self.settings.keyboard_theme != self.draft.keyboard_theme;
+        self.dashboard.redraw |= theme_changed;
         self.settings = self.draft.clone();
+        if theme_changed {
+            self.apply_theme(context);
+        }
         if !uses_osc_query(&self.settings) {
             self.osc_query = None;
         } else if self.osc_query.is_none() {
@@ -324,6 +327,16 @@ impl App {
             self.steamvr_message = error;
         }
         Ok(())
+    }
+
+    /// Recolors the desktop window and the VR dashboard to the saved theme.
+    fn apply_theme(&mut self, context: &egui::Context) {
+        let palette = Palette::for_theme(self.settings.keyboard_theme);
+        palette.install(context);
+        if let Ok(surfaces) = &self.surfaces {
+            palette.install(surfaces.dashboard.context());
+        }
+        context.request_repaint();
     }
 
     fn connect(&mut self, context: &egui::Context) {
@@ -686,7 +699,7 @@ impl App {
         ui.label(
             RichText::new(tr("SteamVR向け IMEキーボード"))
                 .size(15.)
-                .color(SECONDARY),
+                .weak(),
         );
         if self.welcome {
             self.welcome_panel(ui);
@@ -696,8 +709,8 @@ impl App {
         self.steamvr_panel(ui);
         ui.add_space(14.);
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.page, Page::Keyboard, tr("キーボード"));
-            ui.selectable_value(&mut self.page, Page::Settings, tr("設定"));
+            dashboard::choice(ui, &mut self.page, Page::Keyboard, tr("キーボード"));
+            dashboard::choice(ui, &mut self.page, Page::Settings, tr("設定"));
         });
         ui.add_space(14.);
         if self.page == Page::Settings {
@@ -709,7 +722,7 @@ impl App {
         let title = RichText::new(tr("キーボードプレビュー")).size(18.).strong();
         let destination = RichText::new(self.settings.destination.label())
             .size(13.)
-            .color(SECONDARY);
+            .weak();
         if width >= WIDE_LAYOUT {
             ui.horizontal(|ui| {
                 ui.label(title);
@@ -737,7 +750,7 @@ impl App {
             ui.ctx().request_repaint_after(wait);
         }
         let hint = tr("VR では右スティック押し込みで開閉し、左右のトリガーでキーを選びます。");
-        ui.label(RichText::new(hint).color(SECONDARY));
+        ui.label(RichText::new(hint).weak());
     }
 
     fn start_model_download(&mut self, context: &egui::Context, device: D1Device) {
@@ -764,7 +777,7 @@ impl App {
 
     fn welcome_panel(&mut self, ui: &mut Ui) {
         ui.add_space(17.);
-        panel().show(ui, |ui| {
+        panel(ui).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(RichText::new(tr("ViME へようこそ")).size(22.).strong());
             ui.add_space(5.);
@@ -782,7 +795,7 @@ impl App {
                     misconversions::DATA_BYTES
                 };
             if ui
-                .add(primary(tr("おすすめ設定で始める")).min_size(egui::vec2(220., 34.)))
+                .add(primary(ui, tr("おすすめ設定で始める")).min_size(egui::vec2(220., 34.)))
                 .clicked()
             {
                 self.finish_welcome(Welcome::Recommended, ui.ctx());
@@ -793,12 +806,12 @@ impl App {
                     &[&format!("{:.1}", bytes as f64 / 1_000_000_000.)],
                 ))
                 .small()
-                .color(SECONDARY),
+                .weak(),
             );
             ui.add_space(10.);
             ui.separator();
             ui.add_space(10.);
-            ui.label(RichText::new(tr("または、自分で選ぶ")).color(SECONDARY));
+            ui.label(RichText::new(tr("または、自分で選ぶ")).weak());
             ui.add_space(4.);
             self.typo_settings(ui);
             ui.add_space(10.);
@@ -807,15 +820,15 @@ impl App {
                     "ダウンロードは完了を待たずに先へ進めます。進み具合は設定画面に表示されます",
                 ))
                 .small()
-                .color(SECONDARY),
+                .weak(),
             );
             ui.add_space(5.);
             if self.settings_error {
-                ui.label(RichText::new(&self.settings_message).small().color(ERROR));
+                ui.label(RichText::new(&self.settings_message).small().color(ui.visuals().error_fg_color));
                 // Another app may hold the shortcut, and Settings is out of reach here.
                 ui.label(tr("Windows 開閉ショートカット"));
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.draft.hotkey)
+                    widgets::text_input(&mut self.draft.hotkey)
                         .hint_text("Ctrl+Shift+F8")
                         .desired_width(200.),
                 );
@@ -862,7 +875,7 @@ impl App {
         self.dashboard.redraw = true;
     }
     fn steamvr_panel(&mut self, ui: &mut Ui) {
-        panel().show(ui, |ui| {
+        panel(ui).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             if ui.available_width() >= WIDE_LAYOUT {
                 ui.horizontal(|ui| {
@@ -877,10 +890,10 @@ impl App {
                 self.steamvr_actions(ui);
             }
             if !self.steamvr_message.is_empty() {
-                ui.label(RichText::new(&self.steamvr_message).color(ERROR));
+                ui.label(RichText::new(&self.steamvr_message).color(ui.visuals().error_fg_color));
             }
             for error in self.draw_errors.iter().flatten() {
-                ui.label(RichText::new(error).color(ERROR));
+                ui.label(RichText::new(error).color(ui.visuals().error_fg_color));
             }
         });
     }
@@ -892,7 +905,12 @@ impl App {
             Some(_) => tr("接続済み"),
             None => tr("未接続"),
         };
-        ui.label(RichText::new(status).color(if self.vr.is_some() { ACCENT } else { SECONDARY }));
+        let status = RichText::new(status);
+        ui.label(if self.vr.is_some() {
+            status.color(Palette::of(ui.ctx()).accent)
+        } else {
+            status.weak()
+        });
     }
 
     fn steamvr_actions(&mut self, ui: &mut Ui) {
@@ -913,14 +931,14 @@ impl App {
                 } else if toggle_clicked {
                     self.toggle();
                 }
-            } else if ui.add(primary(tr("SteamVR に接続"))).clicked() {
+            } else if ui.add(primary(ui, tr("SteamVR に接続"))).clicked() {
                 self.connect(ui.ctx());
             }
         });
     }
 
     fn settings_panel(&mut self, ui: &mut Ui) {
-        panel().show(ui, |ui| {
+        panel(ui).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(RichText::new(tr("設定")).size(18.).strong());
             ui.add_space(5.);
@@ -951,13 +969,12 @@ impl App {
             }
             ui.add_space(10.);
             if !self.settings_message.is_empty() {
-                ui.label(RichText::new(&self.settings_message).small().color(
-                    if self.settings_error {
-                        ERROR
-                    } else {
-                        SECONDARY
-                    },
-                ));
+                let message = RichText::new(&self.settings_message).small();
+                ui.label(if self.settings_error {
+                    message.color(ui.visuals().error_fg_color)
+                } else {
+                    message.weak()
+                });
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
@@ -965,7 +982,7 @@ impl App {
                         self.draft != self.settings
                             || !self.api_key_edits.is_empty()
                             || self.api_key_before_url.is_some(),
-                        primary(tr("設定を保存")),
+                        primary(ui, tr("設定を保存")),
                     )
                     .clicked()
                 {
@@ -984,7 +1001,7 @@ impl App {
     }
 
     fn destination_settings(&mut self, ui: &mut Ui) {
-        ui.label(RichText::new(tr("送信先")).color(SECONDARY));
+        ui.label(RichText::new(tr("送信先")).weak());
         dashboard::destination_options(ui, &mut self.draft.destination);
         let hint = if self.draft.destination == Destination::Osc {
             dashboard::osc_query_option(
@@ -994,51 +1011,52 @@ impl App {
             );
             ui.horizontal_wrapped(|ui| {
                 ui.label(dashboard::osc_port_label(&self.draft));
-                ui.add(egui::DragValue::new(&mut self.draft.osc_port).range(1..=65535));
-                ui.checkbox(&mut self.draft.osc_notify, tr("チャット通知音"));
+                widgets::number_field(ui, egui::DragValue::new(&mut self.draft.osc_port).range(1..=65535));
+                widgets::checkbox(ui, &mut self.draft.osc_notify, tr("チャット通知音"));
             });
             tr("VRChat側でOSCを有効にしてください")
         } else {
             tr("VRアプリの入力欄を開き、Windowsで前面にします")
         };
-        ui.label(RichText::new(hint).size(12.).color(SECONDARY));
+        ui.label(RichText::new(hint).size(12.).weak());
     }
 
     fn control_settings(&mut self, ui: &mut Ui) {
-        ui.label(RichText::new(tr("Windows 開閉ショートカット")).color(SECONDARY));
+        ui.label(RichText::new(tr("Windows 開閉ショートカット")).weak());
         ui.add(
-            egui::TextEdit::singleline(&mut self.draft.hotkey)
+            widgets::text_input(&mut self.draft.hotkey)
                 .hint_text("Ctrl+Shift+F8")
                 .desired_width(200.),
         );
         ui.horizontal_wrapped(|ui| {
             ui.label(tr("キーボード幅"));
-            ui.add(egui::Slider::new(&mut self.draft.overlay_width, 0.65..=1.65).suffix(" m"));
+            ui.add(widgets::Slider::new(&mut self.draft.overlay_width, 0.65..=1.65).suffix(" m"));
         });
         dashboard::keyboard_theme_options(ui, &mut self.draft.keyboard_theme);
     }
 
     fn typo_report_settings(&mut self, ui: &mut Ui) {
-        ui.checkbox(
+        widgets::checkbox(
+            ui,
             &mut self.draft.report_typos,
             tr("誤字・誤変換の報告を許可する"),
         );
         let notice = tr(
             "打ち直しが誤字や誤変換の修正と判定されると、修正前後の語、入力言語、アプリのバージョンが ViME の運営者に自動送信され、変換精度の分析と改善に使われます。送信する語に個人情報や機密情報が含まれる可能性があります。設定でいつでもオフにできます。",
         );
-        ui.label(RichText::new(notice).small().color(SECONDARY));
+        ui.label(RichText::new(notice).small().weak());
         if !crate::keyboard::typo_reporting_available() {
             ui.label(
                 RichText::new(tr("このビルドには報告先が設定されていません"))
                     .small()
-                    .color(SECONDARY),
+                    .weak(),
             );
         }
     }
 
     fn typo_settings(&mut self, ui: &mut Ui) {
         let typo = &mut self.draft.typo;
-        ui.label(RichText::new(tr("誤字修正")).color(SECONDARY));
+        ui.label(RichText::new(tr("誤字修正")).weak());
         egui::ComboBox::from_id_salt("typo_provider")
             .selected_text(typo.provider.label())
             .show_ui(ui, |ui| {
@@ -1080,7 +1098,7 @@ impl App {
                     "誤字判定に失敗しました ({0})",
                     &[&error.to_string()],
                 ))
-                .color(ERROR),
+                .color(ui.visuals().error_fg_color),
             );
         }
     }
@@ -1170,9 +1188,9 @@ impl App {
         ui.add_enabled_ui(self.model_download.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(tr("推論デバイス"));
-                ui.radio_value(selected, D1Device::Cpu, "CPU");
-                ui.radio_value(selected, D1Device::Vulkan, tr("GPU（Vulkan）"));
-                ui.radio_value(selected, D1Device::Cuda, tr("GPU（CUDA）"));
+                widgets::radio(ui, selected, D1Device::Cpu, "CPU");
+                widgets::radio(ui, selected, D1Device::Vulkan, tr("GPU（Vulkan）"));
+                widgets::radio(ui, selected, D1Device::Cuda, tr("GPU（CUDA）"));
             });
         });
         let device = *selected;
@@ -1183,12 +1201,14 @@ impl App {
         if let Some(download) = &self.model_download {
             let received = download.received();
             let total = download.total();
-            ui.add(
-                egui::ProgressBar::new(received as f32 / total.max(1) as f32).text(format!(
+            widgets::progress(
+                ui,
+                received as f32 / total.max(1) as f32,
+                format!(
                     "{:.0} / {:.0} MB",
                     received as f64 / 1_000_000.,
                     total as f64 / 1_000_000.
-                )),
+                ),
             );
             if ui
                 .add_enabled(
@@ -1226,7 +1246,7 @@ impl App {
                     "モデルを取得できませんでした ({0})",
                     &[&error.to_string()],
                 ))
-                .color(ERROR),
+                .color(ui.visuals().error_fg_color),
             );
         }
     }
@@ -1235,7 +1255,7 @@ impl App {
     /// Kyoto University only when the user asks and is counted on this PC.
     fn misconversion_panel(&mut self, ui: &mut Ui) {
         ui.add_space(8.);
-        ui.label(RichText::new(tr("日本語の誤変換データ（任意）")).color(SECONDARY));
+        ui.label(RichText::new(tr("日本語の誤変換データ（任意）")).weak());
         if let Some(download) = &self.misconversion_download {
             if download.summarizing() {
                 ui.horizontal(|ui| {
@@ -1245,12 +1265,14 @@ impl App {
             } else {
                 let received = download.received();
                 let total = misconversions::DATA_BYTES;
-                ui.add(
-                    egui::ProgressBar::new(received as f32 / total as f32).text(format!(
+                widgets::progress(
+                    ui,
+                    received as f32 / total as f32,
+                    format!(
                         "{:.0} / {:.0} MB",
                         received as f64 / 1_000_000.,
                         total as f64 / 1_000_000.
-                    )),
+                    ),
                 );
             }
             if ui
@@ -1308,7 +1330,7 @@ impl App {
                     "誤変換データを取得できませんでした ({0})",
                     &[&error.to_string()],
                 ))
-                .color(ERROR),
+                .color(ui.visuals().error_fg_color),
             );
         }
     }
@@ -1328,7 +1350,7 @@ impl App {
         let mut overrides = profile.overrides;
         let previous = overrides.clone();
         ui.add_space(8.);
-        ui.label(RichText::new(tr("キャリブレーション")).color(SECONDARY));
+        ui.label(RichText::new(tr("キャリブレーション")).weak());
         if let Some(measurement) = profile.measurement {
             ui.label(tr_args(
                 "逐次 p95 {0} ms · 選択時 p95 {1} ms · 実測 {2} req/s",
@@ -1368,13 +1390,13 @@ impl App {
         {
             ui.label(
                 RichText::new(tr_args("計測に失敗しました ({0})", &[&error.to_string()]))
-                    .color(ERROR),
+                    .color(ui.visuals().error_fg_color),
             );
         }
         let max_rate = limits.requests_per_second.max(100.0);
         if ui
             .add(
-                egui::Slider::new(&mut limits.concurrent, 1..=calibration::MAX_CONCURRENCY)
+                widgets::Slider::new(&mut limits.concurrent, 1..=calibration::MAX_CONCURRENCY)
                     .text(tr("最大同時数")),
             )
             .changed()
@@ -1383,7 +1405,7 @@ impl App {
         }
         if ui
             .add(
-                egui::Slider::new(&mut limits.requests_per_second, 0.01..=max_rate)
+                widgets::Slider::new(&mut limits.requests_per_second, 0.01..=max_rate)
                     .logarithmic(true)
                     .max_decimals(2)
                     .suffix(" req/s")
@@ -1395,7 +1417,7 @@ impl App {
         }
         if ui
             .add(
-                egui::Slider::new(
+                widgets::Slider::new(
                     &mut limits.debounce_ms,
                     calibration::MIN_DEBOUNCE_MS..=calibration::MAX_DEBOUNCE_MS,
                 )
@@ -1500,16 +1522,7 @@ impl App {
 }
 
 fn system_one_field(value: &mut String) -> egui::TextEdit<'_> {
-    egui::TextEdit::singleline(value)
-        .align(egui::Align2::LEFT_CENTER)
-        .margin(Margin {
-            left: 8,
-            right: 8,
-            top: 6,
-            bottom: 4,
-        })
-        .min_size(egui::vec2(0., 30.))
-        .desired_width(420.)
+    widgets::text_input(value).desired_width(420.)
 }
 
 fn api_key_input<'a>(value: &'a mut String, placeholder: &str) -> egui::TextEdit<'a> {
@@ -1685,7 +1698,7 @@ impl App {
             Margin::symmetric(14, 12)
         };
         Frame::new()
-            .fill(BACKGROUND)
+            .fill(Palette::of(ui.ctx()).panel)
             .inner_margin(margin)
             .show(ui, |ui| {
                 ScrollArea::vertical()
@@ -1708,9 +1721,10 @@ impl App {
 }
 
 fn steamvr_auto_launch_warning(ui: &mut Ui) {
-    let ink = Color32::from_rgb(255, 222, 160);
+    let palette = Palette::of(ui.ctx());
+    let ink = palette.warning_ink;
     Frame::new()
-        .fill(Color32::from_rgb(61, 45, 25))
+        .fill(palette.warning)
         .inner_margin(Margin::symmetric(16, 8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -1726,29 +1740,17 @@ fn steamvr_auto_launch_warning(ui: &mut Ui) {
         });
 }
 
-fn primary(label: &str) -> Button<'_> {
-    Button::new(RichText::new(label).color(BACKGROUND).strong()).fill(ACCENT)
+fn primary<'a>(ui: &Ui, label: &str) -> Button<'a> {
+    dashboard::primary(ui.ctx(), label)
 }
 
-fn panel() -> Frame {
+fn panel(ui: &Ui) -> Frame {
+    let palette = Palette::of(ui.ctx());
     Frame::new()
-        .fill(PANEL)
-        .stroke(Stroke::new(1., EDGE))
+        .fill(palette.card)
+        .stroke(Stroke::new(1., palette.border))
         .corner_radius(12)
         .inner_margin(Margin::symmetric(16, 12))
-}
-
-fn visuals() -> egui::Visuals {
-    let mut visuals = egui::Visuals::dark();
-    visuals.override_text_color = Some(INK);
-    visuals.panel_fill = BACKGROUND;
-    visuals.extreme_bg_color = BACKGROUND;
-    visuals.selection.bg_fill = Color32::from_rgb(53, 88, 119);
-    visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(41, 52, 68);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(57, 73, 93);
-    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(70, 90, 113);
-    visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
-    visuals
 }
 
 fn windows_fonts() -> FontDefinitions {
