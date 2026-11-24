@@ -554,6 +554,24 @@ mod tests {
     }
 
     #[test]
+    fn resumes_romaji_after_deleting_a_mistyped_key_or_kana() {
+        for (typed, remaining, next, expected) in [
+            ("kakikp", "かきk", "u", "かきく"),
+            ("kakikpa", "かきk", "u", "かきく"),
+            ("syka", "sy", "a", "しゃ"),
+            ("SH.", "SH", "u", "しゅ"),
+            ("kkpa", "kk", "a", "っか"),
+        ] {
+            let mut keyboard = Keyboard::new(eframe::egui::Context::default());
+            keys(&mut keyboard, typed);
+            keyboard.apply(Action::Backspace);
+            assert_eq!(keyboard.composer.preedit(), remaining, "{typed}");
+            keys(&mut keyboard, next);
+            assert_eq!(keyboard.composer.preedit(), expected, "{typed}");
+        }
+    }
+
+    #[test]
     fn space_types_a_space_without_a_reading() {
         let mut keyboard = Keyboard::new(eframe::egui::Context::default());
         keyboard.apply(Action::Space);

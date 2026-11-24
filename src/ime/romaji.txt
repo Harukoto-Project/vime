@@ -7,6 +7,15 @@ bya=びゃ byu=びゅ byo=びょ pya=ぴゃ pyu=ぴゅ pyo=ぴょ
 mya=みゃ myu=みゅ myo=みょ rya=りゃ ryu=りゅ ryo=りょ
 dya=ぢゃ dyu=ぢゅ dyo=ぢょ
 shi=し chi=ち tsu=つ dzu=づ dji=ぢ
+kyi=きぃ kye=きぇ gyi=ぎぃ gye=ぎぇ syi=しぃ sye=しぇ
+zyi=じぃ zye=じぇ jyi=じぃ jye=じぇ tyi=ちぃ tye=ちぇ cyi=ちぃ cye=ちぇ dyi=ぢぃ dye=ぢぇ
+nyi=にぃ nye=にぇ hyi=ひぃ hye=ひぇ byi=びぃ bye=びぇ pyi=ぴぃ pye=ぴぇ
+myi=みぃ mye=みぇ ryi=りぃ rye=りぇ
+swa=すぁ swi=すぃ swu=すぅ swe=すぇ swo=すぉ
+tsa=つぁ tsi=つぃ tse=つぇ tso=つぉ tha=てゃ the=てぇ tho=てょ
+twa=とぁ twi=とぃ twe=とぇ two=とぉ
+fwa=ふぁ fwi=ふぃ fwu=ふぅ fwe=ふぇ fwo=ふぉ
+qa=くぁ qi=くぃ qe=くぇ qo=くぉ yi=い ye=いぇ wu=う xn=ん
 she=しぇ che=ちぇ kwa=くぁ gwa=ぐぁ
 thi=てぃ thu=てゅ dhi=でぃ dhu=でゅ twu=とぅ dwu=どぅ
 wha=うぁ whi=うぃ whe=うぇ who=うぉ

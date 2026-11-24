@@ -85,15 +85,27 @@ impl Composer {
             if let Some((index, last)) = preedit.grapheme_indices(true).next_back() {
                 // Keep a pending romaji suffix editable when deletion leaves the
                 // preceding display intact.
-                if let Some(remaining) = self.reading.strip_suffix(last)
-                    && preedit[..index].strip_prefix(&self.japanese_prefix)
-                        == Some(japanese::kana(remaining, false).as_str())
+                if let Some((last_key, _)) = self.reading.char_indices().next_back()
+                    && (preedit[..index].strip_prefix(&self.japanese_prefix)
+                        == Some(japanese::kana(&self.reading[..last_key], false).as_str())
+                        || (last.as_bytes()[0].is_ascii_alphabetic()
+                            && self.reading[..last_key].ends_with(['n', 'N'])
+                            && preedit[..index].ends_with('ん')))
                 {
-                    self.reading.truncate(remaining.len());
+                    self.reading.truncate(last_key);
                 } else {
                     preedit.truncate(index);
+                    // Deleting a kana can expose unfinished letters (kpa → k).
+                    // Keep the trailing letters editable without changing the
+                    // displayed text (e.g. literal "nn" after deleting from "nnn").
+                    let mut split = preedit
+                        .trim_end_matches(|c: char| c.is_ascii_alphabetic())
+                        .len();
+                    while japanese::kana(&preedit[split..], false) != preedit[split..] {
+                        split += 1;
+                    }
+                    self.reading = preedit.split_off(split);
                     self.japanese_prefix = preedit;
-                    self.reading.clear();
                 }
             }
             return;
@@ -389,6 +401,29 @@ mod tests {
         assert_eq!(composer.preedit(), "안녕하세요");
         composer.backspace();
         assert_eq!(composer.preedit(), "안녕하셍");
+    }
+
+    #[test]
+    fn completes_each_romaji_spelling_after_correcting_a_typo() {
+        for entry in include_str!("romaji.txt").split_ascii_whitespace() {
+            let (roman, kana) = entry.split_once('=').unwrap();
+            for split in 0..roman.len() {
+                let mut composer = Composer::default();
+                let (start, end) = roman.split_at(split);
+                "kaki"
+                    .chars()
+                    .chain(start.chars())
+                    .for_each(|k| composer.key(k));
+                composer.key('p');
+                composer.backspace();
+                end.chars().for_each(|k| composer.key(k));
+                assert_eq!(
+                    composer.preedit(),
+                    format!("かき{kana}"),
+                    "{roman} at {split}"
+                );
+            }
+        }
     }
 
     #[test]
