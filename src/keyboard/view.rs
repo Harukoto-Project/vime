@@ -221,10 +221,11 @@ impl Board<'_> {
     }
 
     fn background(&self, shift: f32) {
+        // Use the original overlay's alpha for the panel and keep the controls crisp.
         self.ui.painter().rect(
             self.box_abs(4., 4., 852., 416. + shift),
             24. * self.scale,
-            self.palette.panel,
+            self.palette.panel.gamma_multiply_u8(238),
             Stroke::new(self.scale, self.palette.border),
             StrokeKind::Inside,
         );
