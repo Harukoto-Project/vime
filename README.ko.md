@@ -19,14 +19,16 @@ ViME는 Windows에서 실행되는 SteamVR용 오픈 소스 IME 키보드입니�
 
 ## 설치
 
-1. [Releases](https://github.com/Harukoto-Project/vime/releases)에서 `ViME-<버전>-windows-x64.zip`을 다운로드합니다.
-2. 압축을 풀고 `vime.exe`를 실행합니다. 배포 버전은 Windows x64용이며 Rust를 설치할 필요가 없습니다.
+1. [Releases](https://github.com/Harukoto-Project/vime/releases)에서 `ViME-<버전>-windows-x64.msi`를 다운로드합니다.
+2. MSI를 실행한 뒤 Windows 시작 메뉴에서 **ViME**를 엽니다. 배포 버전은 Windows x64용이며 Rust를 설치할 필요가 없습니다.
 3. 처음 실행하면 오타 수정 설정을 선택합니다. **추천 설정으로 시작**을 선택하면 로컬 d1-2B와 CUDA 실행 환경, 일본어 오변환 데이터를 다운로드합니다. 처음 설치할 때는 약 1.9 GB를 받습니다. 키보드부터 사용하려면 **나중에 설정**을 선택하세요.
 4. VR에서 사용하려면 SteamVR을 실행합니다. ViME를 먼저 실행했다면 Windows 앱에서 **SteamVR에 연결**을 누르세요. 연결하기 전에도 Windows 앱의 키보드 미리보기에서 입력을 시험해 볼 수 있습니다.
 
 ![Windows용 ViME의 초기 설정 화면. 추천 설정과 CPU, Vulkan, CUDA 옵션이 표시된다.](assets/readme/windows-welcome.png)
 
-배포 ZIP이 없다면 [소스에서 실행](#소스에서-실행)할 수 있습니다.
+MSI가 없다면 [소스에서 실행](#소스에서-실행)할 수 있습니다.
+
+**v1.0.0 또는 v1.1.0에서 업그레이드하는 경우** 업데이트가 준비되면 기존 앱에서 **설정 → 다시 시작하여 업데이트**를 선택합니다. MSI 설치가 끝나면 ViME가 다시 열립니다. 시스템 트레이에서 종료하면 다음 실행 시 MSI가 열립니다. 이전 폴더의 `vime.exe`는 설치된 ViME를 여는 `ViME.lnk`로 바뀝니다. 설정과 다운로드한 데이터는 그대로 사용할 수 있습니다.
 
 배포 버전은 시작할 때 GitHub Releases에서 업데이트를 확인합니다. 업데이트가 준비되면 시스템 트레이에서 **ViME 종료**를 선택할 때 적용됩니다. 바로 적용하려면 **설정 → 다시 시작하여 업데이트**를 선택하세요.
 

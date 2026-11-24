@@ -17,6 +17,14 @@ mod tray;
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 fn main() -> eframe::Result {
+    if std::env::args_os().any(|arg| arg == "--refresh-steamvr-manifest") {
+        let result = vime::settings::Settings::directory()
+            .and_then(|directory| vime::steamvr::refresh_startup_manifest(&directory));
+        std::process::exit(i32::from(result.is_err()));
+    }
+    if vime::update::launch_migration() {
+        return Ok(());
+    }
     desktop::run()
 }
 

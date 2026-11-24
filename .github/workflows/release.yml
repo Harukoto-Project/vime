@@ -16,12 +16,25 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install wix --tool-path target/wix --version 6.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install WiX' }
+          target/wix/wix.exe extension add WixToolset.UI.wixext/6.0.2
 
       - name: Check the tag matches Cargo.toml
         shell: bash
@@ -47,14 +60,14 @@ jobs:
           VIME_TYPO_REPORT_URL: ${{ vars.VIME_TYPO_REPORT_URL }}
         run: cargo build --release --locked
 
-      - name: Package
+      - name: Build the Windows MSI and legacy update ZIP
         shell: pwsh
         run: |
           $name = "ViME-$env:VERSION-windows-x64"
           New-Item -ItemType Directory -Path "dist/$name/assets" -Force | Out-Null
           Copy-Item target/release/vime.exe, LICENSE, README.md, README.ja.md, README.ko.md, CONTRIBUTING.md "dist/$name"
           Copy-Item assets/vr-keyboard.png, assets/vr-conversion.png "dist/$name/assets"
-          Copy-Item assets/readme "dist/$name/assets" -Recurse
+          Copy-Item assets/readme "dist/$name/assets" -Recurse -Force
           $engines = Get-Content src/local_d1/engine.json -Raw | ConvertFrom-Json
           $runtimeFiles = @($engines.files)
           foreach ($engine in @($engines.cpu, $engines.vulkan)) {
@@ -65,27 +78,55 @@ jobs:
               throw "llama.cpp runtime checksum mismatch"
             }
             New-Item -ItemType Directory -Path $runtime -Force | Out-Null
-            tar.exe -xf $archive -C $runtime @runtimeFiles
+            & "$env:SystemRoot/System32/tar.exe" -xf $archive -C $runtime @runtimeFiles
             if ($LASTEXITCODE -ne 0) { throw "Could not extract llama.cpp runtime" }
             Copy-Item src/local_d1/LLAMA_LICENSE "$runtime/LICENSE-llama.cpp"
           }
           & "dist/$name/llama/$($engines.cpu.directory)/llama-server.exe" --version
           if ($LASTEXITCODE -ne 0) { throw "Could not start bundled llama.cpp runtime" }
-          Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
-          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  $name.zip" | Set-Content -Encoding ascii "dist/$name.zip.sha256"
+          $msi = "$name.msi"
+          $msiVersion = ($env:VERSION -split '[-+]')[0]
+          $license = (Get-Content LICENSE -Raw).Replace('\', '\\').Replace('{', '\{').Replace('}', '\}')
+          '{\rtf1\ansi ' + ($license -replace '\r?\n', '\par ') + '}' | Set-Content -Encoding ascii target/license.rtf
+          target/wix/wix.exe build installer/ViME.wxs -arch x64 -ext WixToolset.UI.wixext `
+            -b "Payload=$((Resolve-Path "dist/$name").Path)" -d "Version=$msiVersion" `
+            -d "LicenseRtf=$((Resolve-Path target/license.rtf).Path)" -o "dist/$msi"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not build the ViME MSI' }
+          $hash = (Get-FileHash "dist/$msi" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $msi" | Set-Content -Encoding ascii "dist/$msi.sha256"
+
+          # v1.0.0 and v1.1.0 look for this exact ZIP name, even after later releases.
+          $bridge = New-Item -ItemType Directory -Path target/msi-migration -Force
+          $bridgeExe = Join-Path $bridge.FullName 'vime.exe'
+          $bridgeMsi = Join-Path $bridge.FullName 'vime-migration.msi'
+          Copy-Item target/release/vime.exe $bridgeExe
+          Copy-Item "dist/$msi" $bridgeMsi
+          $hash | Set-Content -Encoding ascii "$bridgeMsi.sha256"
+          Compress-Archive -LiteralPath $bridgeExe, $bridgeMsi, "$bridgeMsi.sha256" `
+            -DestinationPath "dist/$name.zip" -CompressionLevel NoCompression -Force
+          if ((Get-Item "dist/$name.zip").Length -gt 1GB) { throw 'The migration ZIP is too large for older updaters' }
+          $zipHash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$zipHash  $name.zip" | Set-Content -Encoding ascii "dist/$name.zip.sha256"
+
+      - name: Test direct migration from legacy ZIP releases
+        shell: pwsh
+        run: |
+          $name = "ViME-$env:VERSION-windows-x64"
+          & ./tests/windows-msi-migration.ps1 -Msi "dist/$name.msi" -Bridge "dist/$name.zip"
 
       - name: Publish the release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          package="dist/ViME-$VERSION-windows-x64"
           flags=(--generate-notes)
           notes_file=".github/release-notes/$GITHUB_REF_NAME.md"
           if [[ -f "$notes_file" ]]; then
             flags=(--notes-file "$notes_file")
           fi
           case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.sha256 \
+          gh release create "$GITHUB_REF_NAME" \
+            "$package.msi" "$package.msi.sha256" "$package.zip" "$package.zip.sha256" \
             --title "ViME $VERSION" \
             "${flags[@]}"

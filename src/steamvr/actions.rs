@@ -118,9 +118,14 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
     )?;
 
     let application = directory.join("vime.vrmanifest");
+    write_application_manifest(&application)?;
+    Ok((application, actions))
+}
+
+pub(super) fn write_application_manifest(application: &Path) -> io::Result<()> {
     let executable = env::current_exe()?;
     write_json(
-        &application,
+        application,
         &json!({
             "source": "builtin",
             "applications": [{
@@ -134,8 +139,7 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
                 "strings": { "en_us": { "name": "ViME", "description": "Virtual keyboard with IME" } }
             }]
         }),
-    )?;
-    Ok((application, actions))
+    )
 }
 
 fn write_json(path: &Path, value: &Value) -> io::Result<()> {

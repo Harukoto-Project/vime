@@ -1,118 +1,144 @@
 $ErrorActionPreference = 'Stop'
-$stage = $env:VIME_UPDATE_STAGING
-$exe = $env:VIME_UPDATE_EXE
-$install = [IO.Path]::GetDirectoryName($exe)
-$package = Join-Path $stage 'package'
-$backup = Join-Path $stage 'backup'
-$changes = [Collections.Generic.List[object]]::new()
-$lock = $null
-$cleanup = $false
+$msi = $env:VIME_UPDATE_MSI
+$legacy = $env:VIME_UPDATE_LEGACY_EXE
+$sidecar = $env:VIME_UPDATE_SIDECAR
+$installed = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\ViME\vime.exe'
+$msiexec = Join-Path ([Environment]::SystemDirectory) 'msiexec.exe'
+$mutex = $null
+$locked = $false
+$ready = $false
 $failure = $null
 
-function Get-UpdateFiles([IO.DirectoryInfo]$directory, [string]$prefix) {
-    foreach ($entry in $directory.EnumerateFileSystemInfos()) {
-        $relative = [IO.Path]::Combine($prefix, $entry.Name)
-        if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-            throw "Unexpected link in the update: $relative"
+function Start-Application([string]$path, [string[]]$arguments) {
+    $start = [Diagnostics.ProcessStartInfo]::new($path, ($arguments -join ' '))
+    $start.WorkingDirectory = [IO.Path]::GetDirectoryName($path)
+    $start.UseShellExecute = $false
+    [Diagnostics.Process]::Start($start)
+}
+
+function Get-Sha256([IO.Stream]$stream) {
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try { [BitConverter]::ToString($hash.ComputeHash($stream)).Replace('-', '') }
+    finally { $hash.Dispose() }
+}
+
+function Get-FileSha256([string]$path) {
+    $file = [IO.File]::OpenRead($path)
+    try { Get-Sha256 $file }
+    finally { $file.Dispose() }
+}
+
+function Set-MigrationShortcut([string]$directory, [string]$target) {
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($name in 'ViME.lnk', 'ViME (MSI).lnk') {
+        $path = Join-Path $directory $name
+        if (Test-Path -LiteralPath $path) {
+            $item = Get-Item -LiteralPath $path -Force
+            if (-not $item.PSIsContainer -and
+                -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+                $shell.CreateShortcut($path).TargetPath -eq $target) {
+                return
+            }
+            continue
         }
-        if ($entry -is [IO.DirectoryInfo]) {
-            Get-UpdateFiles $entry $relative
-        } else {
-            @{ Source = $entry.FullName; Relative = $relative }
-        }
+        $shortcut = $shell.CreateShortcut($path)
+        $shortcut.TargetPath = $target
+        $shortcut.WorkingDirectory = [IO.Path]::GetDirectoryName($target)
+        $shortcut.Save()
+        return
     }
+    throw 'The ViME shortcut names are already in use.'
 }
 
 try {
-    if ([IO.Path]::GetDirectoryName($stage) -ne $install -or
-        -not [IO.Path]::GetFileName($stage).StartsWith('.vime-update-')) {
-        throw 'Invalid update staging directory.'
+    if ($legacy) {
+        $mutex = [Threading.Mutex]::new($false, 'Local\ViME.MsiMigration')
+        try { $locked = $mutex.WaitOne(0) }
+        catch [Threading.AbandonedMutexException] { $locked = $true }
+        if (-not $locked) { return }
     }
-    $cleanup = $true
     $parent = Get-Process -Id ([int]$env:VIME_UPDATE_PID) -ErrorAction SilentlyContinue
     if ($parent -and -not $parent.WaitForExit(30000)) {
         throw 'ViME did not exit.'
     }
 
-    $lock = [IO.FileStream]::new(
-        (Join-Path $install '.vime-update.lock'), [IO.FileMode]::OpenOrCreate,
-        [IO.FileAccess]::Write, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
-    $sha256 = [Security.Cryptography.SHA256]::Create()
+    $expected = $env:VIME_UPDATE_CHECKSUM
+    if ($legacy) {
+        $expected = ([IO.File]::ReadAllText($sidecar)).Trim()
+    }
+    $stream = [IO.File]::Open($msi, 'Open', 'Read', 'Read')
     try {
-        $stream = [IO.File]::OpenRead($exe)
-        try { $hash = [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '') }
-        finally { $stream.Dispose() }
+        if ($expected -notmatch '^[0-9a-f]{64}$' -or
+            (Get-Sha256 $stream) -ne $expected) {
+            throw 'The ViME installer checksum does not match.'
+        }
+        $setup = Start-Application $msiexec @('/i', "`"$msi`"", '/passive', '/norestart')
+        try {
+            $setup.WaitForExit()
+            if ($setup.ExitCode -ne 0) {
+                throw "Windows Installer exit code: $($setup.ExitCode)"
+            }
+        } finally {
+            $setup.Dispose()
+        }
     } finally {
-        $sha256.Dispose()
+        $stream.Dispose()
     }
-    if ($hash -eq $env:VIME_UPDATE_ORIGINAL_HASH) {
-        $files = @(Get-UpdateFiles ([IO.DirectoryInfo]::new($package)) '')
-        $payloadExe = @($files | Where-Object { $_.Relative -eq 'vime.exe' })
-        if ($payloadExe.Count -ne 1) {
-            throw 'Missing update executable.'
-        }
-        # Update the executable last so it marks a completed installation.
-        $files = @($files | Where-Object { $_.Relative -ne 'vime.exe' }) + $payloadExe
-        foreach ($file in $files) {
-            $relative = $file.Relative
-            $target = if ($relative -eq 'vime.exe') { $exe } else { Join-Path $install $relative }
-            if ([IO.File]::Exists($target) -and
-                ([IO.File]::GetAttributes($target) -band [IO.FileAttributes]::ReparsePoint)) {
-                throw "Unexpected link in the installation: $relative"
-            }
-            $directory = [IO.Path]::GetDirectoryName($target)
-            while ($directory -ne $install) {
-                if ([IO.Directory]::Exists($directory) -and
-                    ([IO.File]::GetAttributes($directory) -band [IO.FileAttributes]::ReparsePoint)) {
-                    throw "Unexpected linked directory in the installation: $relative"
-                }
-                $directory = [IO.Path]::GetDirectoryName($directory)
-            }
-            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target)) | Out-Null
-            $saved = Join-Path $backup $relative
-            $change = @{ Target = $target; Backup = $saved; Added = $false }
-            $changes.Add($change)
-            if ([IO.File]::Exists($target)) {
-                [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($saved)) | Out-Null
-                [IO.File]::Replace($file.Source, $target, $saved)
-            } else {
-                [IO.File]::Move($file.Source, $target)
-                $change.Added = $true
-            }
-        }
+    if (-not [IO.File]::Exists($installed)) {
+        throw 'The installed ViME executable was not found.'
     }
+
+    if ($legacy) {
+        if ((Get-FileSha256 $installed) -ne $env:VIME_UPDATE_LEGACY_HASH) {
+            throw 'The installed ViME executable did not match the update.'
+        }
+        $refresh = Start-Application $installed @('--refresh-steamvr-manifest')
+        try {
+            $refresh.WaitForExit()
+            if ($refresh.ExitCode -ne 0) {
+                throw 'The SteamVR startup manifest could not be updated.'
+            }
+        } finally {
+            $refresh.Dispose()
+        }
+        $ready = $true
+        $directory = [IO.Path]::GetDirectoryName($legacy)
+        Set-MigrationShortcut $directory $installed
+        if ($legacy -ne $installed -and $env:VIME_UPDATE_IN_PLACE -ne '1') {
+            if ((Get-FileSha256 $legacy) -ne $env:VIME_UPDATE_LEGACY_HASH) {
+                throw 'The original ViME executable changed during installation.'
+            }
+            [IO.File]::Delete($legacy)
+        }
+        [IO.File]::Delete($sidecar)
+        [IO.File]::Delete($msi)
+    }
+    $ready = $true
 } catch {
     $failure = $_.Exception.Message
-    for ($index = $changes.Count - 1; $index -ge 0; $index--) {
-        $change = $changes[$index]
-        try {
-            if ([IO.File]::Exists($change.Backup)) {
-                if ([IO.File]::Exists($change.Target)) {
-                    [IO.File]::Replace($change.Backup, $change.Target, [NullString]::Value)
-                } else {
-                    [IO.File]::Move($change.Backup, $change.Target)
-                }
-            } elseif ($change.Added) {
-                [IO.File]::Delete($change.Target)
-            }
-        } catch {
-            $cleanup = $false
-            $failure += "`n$($_.Exception.Message)`n$backup"
-        }
-    }
 } finally {
-    if ($lock) { $lock.Dispose() }
-    if ($cleanup) {
-        try { [IO.Directory]::Delete($stage, $true) } catch {}
+    if ($locked) { $mutex.ReleaseMutex() }
+    if ($mutex) { $mutex.Dispose() }
+    if ($env:VIME_UPDATE_STAGING) {
+        try {
+            [IO.File]::Delete($msi)
+            [IO.Directory]::Delete($env:VIME_UPDATE_STAGING)
+        } catch {}
     }
 }
 
-if ($env:VIME_UPDATE_RESTART -eq '1' -and $cleanup) {
+if ($env:VIME_UPDATE_RESTART -eq '1') {
     try {
-        $start = [Diagnostics.ProcessStartInfo]::new($exe)
-        $start.WorkingDirectory = $install
-        $start.UseShellExecute = $false
-        [Diagnostics.Process]::Start($start).Dispose()
+        $arguments = @()
+        if ($env:VIME_UPDATE_STEAMVR -eq '1') { $arguments += '--steamvr-launch' }
+        if ($ready) {
+            (Start-Application $installed $arguments).Dispose()
+        } elseif ($legacy -and [IO.File]::Exists($legacy)) {
+            $arguments += '--skip-msi-migration'
+            (Start-Application $legacy $arguments).Dispose()
+        } elseif ($env:VIME_UPDATE_CURRENT_EXE -and [IO.File]::Exists($env:VIME_UPDATE_CURRENT_EXE)) {
+            (Start-Application $env:VIME_UPDATE_CURRENT_EXE $arguments).Dispose()
+        }
     } catch {
         $failure += "`n$($_.Exception.Message)"
     }

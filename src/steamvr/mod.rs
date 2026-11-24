@@ -21,6 +21,14 @@ static RUNTIME_LOCK: Mutex<()> = Mutex::new(());
 
 pub const LAUNCH_ARGUMENT: &str = "--steamvr-launch";
 
+pub fn refresh_startup_manifest(directory: &Path) -> std::io::Result<()> {
+    let manifest = directory.join("steamvr/vime.vrmanifest");
+    if manifest.try_exists()? {
+        actions::write_application_manifest(&manifest)?;
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 pub struct Frame {
     pub toggle: bool,

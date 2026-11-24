@@ -19,14 +19,16 @@ ViME is an open-source IME keyboard for SteamVR on Windows. Type in Japanese, En
 
 ## Install
 
-1. Download `ViME-<version>-windows-x64.zip` from [Releases](https://github.com/Harukoto-Project/vime/releases).
-2. Extract the ZIP and run `vime.exe`. The release build runs on Windows x64 and requires no Rust installation.
+1. Download `ViME-<version>-windows-x64.msi` from [Releases](https://github.com/Harukoto-Project/vime/releases).
+2. Run the installer, then open **ViME** from the Windows Start menu. The release build runs on Windows x64 and requires no Rust installation.
 3. Choose a typo correction setup on first launch. **Start with the recommended setup** downloads local d1-2B, its CUDA runtime, and Japanese misconversion data (about 1.9 GB on a fresh setup). Choose **Set up later** to try the keyboard first.
 4. Start SteamVR for VR use. If ViME is already running, select **Connect to SteamVR** in the Windows app. You can try the keyboard in the Windows preview before connecting.
 
 ![The ViME welcome screen on Windows shows recommended setup and the CPU, Vulkan, and CUDA options.](assets/readme/windows-welcome.png)
 
-If a release ZIP is unavailable, [run ViME from source](#run-from-source).
+If a release installer is unavailable, [run ViME from source](#run-from-source).
+
+**Upgrading from v1.0.0 or v1.1.0.** When the update is ready in the old app, choose **Settings → Restart to update**. The MSI installer opens and ViME restarts when setup finishes. If you quit ViME from the system tray, the installer opens the next time you launch it. After a successful migration, `ViME.lnk` in the old folder opens the installed app in place of the old `vime.exe`. Your settings and downloaded data carry over.
 
 Release builds check GitHub Releases for updates at startup. Once an update is ready, ViME applies it when you quit via **Exit ViME** in the system tray. Select **Settings → Restart to update** to apply it immediately.
 

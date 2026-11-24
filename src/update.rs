@@ -1,5 +1,5 @@
 use std::{
-    env, fs, io,
+    env, io,
     os::windows::process::CommandExt,
     path::PathBuf,
     process::{Command, Stdio},
@@ -22,15 +22,17 @@ use windows_sys::{
 
 use crate::{
     download::{Progress, fetch, file_sha256},
-    i18n::{tr, tr_args},
+    i18n::{self, Lang, tr, tr_args},
+    settings::Settings,
     system_one::Client,
 };
 
 pub const VERSION_LABEL: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 const REPOSITORY: &str = "https://github.com/Harukoto-Project/vime";
 const LATEST: &str = "https://api.github.com/repos/Harukoto-Project/vime/releases/latest";
-const ARCHIVE_LIMIT: u64 = 1024 * 1024 * 1024;
-const EXECUTABLE: &str = "vime.exe";
+const PACKAGE_LIMIT: u64 = 1024 * 1024 * 1024;
+const MIGRATION_CHECKSUM: &str = "vime-migration.msi.sha256";
+const MIGRATION_INSTALLER: &str = "vime-migration.msi";
 
 #[derive(Default)]
 pub struct Update {
@@ -111,19 +113,7 @@ impl Update {
         if let State::Ready(staged) = std::mem::take(&mut self.state)
             && let Err(error) = staged.launch(self.restart)
         {
-            let message = tr_args(
-                "アップデートを適用できませんでした ({0})",
-                &[&error.to_string()],
-            );
-            let wide: Vec<u16> = message.encode_utf16().chain([0]).collect();
-            unsafe {
-                MessageBoxW(
-                    std::ptr::null_mut(),
-                    wide.as_ptr(),
-                    w!("ViME"),
-                    MB_OK | MB_ICONERROR,
-                )
-            };
+            show_install_error(&error);
         }
     }
 
@@ -199,12 +189,12 @@ impl Release {
         if !version.pre.is_empty() || !version.cmp_precedence(installed).is_gt() {
             return Ok(None);
         }
-        let archive = archive_name(&version);
-        let checksum = format!("{archive}.sha256");
+        let package = package_name(&version);
+        let checksum = format!("{package}.sha256");
         let size = self.assets.iter().find(|asset| {
-            asset.name == archive
+            asset.name == package
                 && asset.state == "uploaded"
-                && (1..=ARCHIVE_LIMIT).contains(&asset.size)
+                && (1..=PACKAGE_LIMIT).contains(&asset.size)
         });
         match size {
             Some(asset)
@@ -223,8 +213,8 @@ impl Release {
     }
 }
 
-fn archive_name(version: &Version) -> String {
-    format!("ViME-{version}-windows-x64.zip")
+fn package_name(version: &Version) -> String {
+    format!("ViME-{version}-windows-x64.msi")
 }
 
 fn read_response(url: &str, limit: usize) -> io::Result<Vec<u8>> {
@@ -239,13 +229,13 @@ fn read_response(url: &str, limit: usize) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn read_checksum(data: &[u8], archive: &str) -> io::Result<String> {
+fn read_checksum(data: &[u8], package: &str) -> io::Result<String> {
     let text = std::str::from_utf8(data).map_err(|_| io::ErrorKind::InvalidData)?;
     let (hash, filename) = text
         .trim()
         .split_once("  ")
         .ok_or(io::ErrorKind::InvalidData)?;
-    if filename != archive || hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+    if filename != package || hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err(io::ErrorKind::InvalidData.into());
     }
@@ -264,37 +254,16 @@ fn prepare_update(preparing: impl FnOnce(Version)) -> io::Result<State> {
         return Ok(State::Current);
     };
     preparing(version.clone());
-    let executable = env::current_exe()?;
-    let original_hash = file_sha256(&executable)?;
-    let archive = archive_name(&version);
-    let url = format!("{REPOSITORY}/releases/download/v{version}/{archive}").replace('+', "%2B");
-    let checksum = read_checksum(&read_response(&format!("{url}.sha256"), 1024)?, &archive)?;
-    let staging = tempfile::Builder::new()
-        .prefix(".vime-update-")
-        .tempdir_in(executable.parent().ok_or(io::ErrorKind::InvalidInput)?)?;
+    let package = package_name(&version);
+    let url = format!("{REPOSITORY}/releases/download/v{version}/{package}").replace('+', "%2B");
+    let checksum = read_checksum(&read_response(&format!("{url}.sha256"), 1024)?, &package)?;
+    let staging = tempfile::Builder::new().prefix("vime-update-").tempdir()?;
     let file = fetch(&url, bytes, &checksum, staging.path(), &Progress::default())?;
-    let package = staging.path().join("package");
-    fs::create_dir(&package)?;
-    if !Command::new(system_tool("tar.exe")?)
-        .creation_flags(CREATE_NO_WINDOW)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .arg("-xf")
-        .arg(file.path())
-        .arg("-C")
-        .arg(&package)
-        .status()?
-        .success()
-        || !package.join(EXECUTABLE).is_file()
-    {
-        return Err(io::Error::other(tr("更新ファイルを展開できませんでした")));
-    }
+    file.persist(staging.path().join(package))?;
     Ok(State::Ready(Staged {
         version,
         staging,
-        executable,
-        original_hash,
+        checksum,
     }))
 }
 
@@ -309,50 +278,144 @@ fn system_tool(name: &str) -> io::Result<PathBuf> {
 struct Staged {
     version: Version,
     staging: TempDir,
-    executable: PathBuf,
-    original_hash: String,
+    checksum: String,
 }
 
 impl Staged {
     fn launch(self, restart: bool) -> io::Result<()> {
-        self.installer(restart, std::process::id())?
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+        installer(restart)?
+            .env("VIME_UPDATE_STAGING", self.staging.path())
+            .env(
+                "VIME_UPDATE_MSI",
+                self.staging.path().join(package_name(&self.version)),
+            )
+            .env("VIME_UPDATE_CHECKSUM", &self.checksum)
+            .env("VIME_UPDATE_CURRENT_EXE", env::current_exe()?)
             .spawn()?;
         let _ = self.staging.keep();
         Ok(())
     }
+}
 
-    fn installer(&self, restart: bool, pid: u32) -> io::Result<Command> {
-        // The script is static. Pass local paths as environment values to preserve
-        // Unicode and avoid interpreting any path characters as PowerShell code.
-        let script: Vec<_> = include_str!("update/install.ps1")
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect();
-        let mut helper = Command::new(system_tool("WindowsPowerShell/v1.0/powershell.exe")?);
-        helper
-            .creation_flags(CREATE_NO_WINDOW)
-            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand"])
-            .arg(STANDARD.encode(script))
-            .env("VIME_UPDATE_STAGING", self.staging.path())
-            .env("VIME_UPDATE_EXE", &self.executable)
-            .env("VIME_UPDATE_ORIGINAL_HASH", &self.original_hash)
-            .env("VIME_UPDATE_PID", pid.to_string())
-            .env("VIME_UPDATE_RESTART", if restart { "1" } else { "0" })
-            .env(
-                "VIME_UPDATE_FAILED",
-                tr("アップデートを適用できませんでした"),
-            );
-        Ok(helper)
+pub fn launch_migration() -> bool {
+    if env::args_os().any(|arg| arg == "--skip-msi-migration") {
+        return false;
     }
+    let Ok(executable) = env::current_exe() else {
+        return false;
+    };
+    let Some(directory) = executable.parent() else {
+        return false;
+    };
+    if !directory.join(MIGRATION_CHECKSUM).is_file() {
+        return false;
+    }
+    i18n::set_language(
+        Settings::directory()
+            .and_then(|directory| Settings::load(&directory))
+            .map_or_else(|_| Lang::system(), |settings| settings.language),
+    );
+    let launch = || -> io::Result<()> {
+        if std::fs::symlink_metadata(&executable)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let checksum = file_sha256(&executable)?;
+        let installed = Settings::directory()?
+            .with_file_name("Programs")
+            .join("ViME/vime.exe");
+        // Compare resolved paths in case the ZIP was extracted into the MSI
+        // destination and the user starts it through a linked directory.
+        let resolved = executable.canonicalize()?;
+        let in_place = installed.canonicalize().is_ok_and(|path| path == resolved);
+        installer(true)?
+            .env("VIME_UPDATE_LEGACY_EXE", &executable)
+            .env("VIME_UPDATE_LEGACY_HASH", checksum)
+            .env("VIME_UPDATE_IN_PLACE", if in_place { "1" } else { "0" })
+            .env(
+                "VIME_UPDATE_STEAMVR",
+                if env::args_os().any(|arg| arg == crate::steamvr::LAUNCH_ARGUMENT) {
+                    "1"
+                } else {
+                    "0"
+                },
+            )
+            .env(
+                "VIME_UPDATE_MSI",
+                executable.with_file_name(MIGRATION_INSTALLER),
+            )
+            .env(
+                "VIME_UPDATE_SIDECAR",
+                executable.with_file_name(MIGRATION_CHECKSUM),
+            )
+            .spawn()?;
+        Ok(())
+    };
+    match launch() {
+        Ok(()) => true,
+        Err(error) => {
+            show_install_error(&error);
+            false
+        }
+    }
+}
+
+fn installer(restart: bool) -> io::Result<Command> {
+    // Paths travel through environment values to preserve Unicode and quoting.
+    let script: Vec<_> = include_str!("update/install.ps1")
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let mut helper = Command::new(system_tool("WindowsPowerShell/v1.0/powershell.exe")?);
+    helper
+        .creation_flags(CREATE_NO_WINDOW)
+        .args(["-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand"])
+        .arg(STANDARD.encode(script))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .env("VIME_UPDATE_PID", std::process::id().to_string())
+        .env("VIME_UPDATE_RESTART", if restart { "1" } else { "0" })
+        .env(
+            "VIME_UPDATE_FAILED",
+            tr("アップデートを適用できませんでした"),
+        );
+    for name in [
+        "STAGING",
+        "CHECKSUM",
+        "LEGACY_EXE",
+        "LEGACY_HASH",
+        "STEAMVR",
+        "SIDECAR",
+        "IN_PLACE",
+        "CURRENT_EXE",
+    ] {
+        helper.env_remove(format!("VIME_UPDATE_{name}"));
+    }
+    Ok(helper)
+}
+
+fn show_install_error(error: &io::Error) {
+    let message = tr_args(
+        "アップデートを適用できませんでした ({0})",
+        &[&error.to_string()],
+    );
+    let wide: Vec<u16> = message.encode_utf16().chain([0]).collect();
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            wide.as_ptr(),
+            w!("ViME"),
+            MB_OK | MB_ICONERROR,
+        )
+    };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::windows::fs::OpenOptionsExt;
 
     #[test]
     fn accepts_only_newer_stable_windows_packages() {
@@ -361,7 +424,9 @@ mod tests {
                 "tag_name": "v0.10.0", "draft": false, "prerelease": false,
                 "assets": [
                     {"name":"ViME-0.10.0-windows-x64.zip","state":"uploaded","size":150},
-                    {"name":"ViME-0.10.0-windows-x64.zip.sha256","state":"uploaded","size":95}
+                    {"name":"ViME-0.10.0-windows-x64.zip.sha256","state":"uploaded","size":95},
+                    {"name":"ViME-0.10.0-windows-x64.msi","state":"uploaded","size":200},
+                    {"name":"ViME-0.10.0-windows-x64.msi.sha256","state":"uploaded","size":95}
                 ]
             }"#,
         )
@@ -369,7 +434,7 @@ mod tests {
         let installed = Version::new(0, 9, 0);
         assert_eq!(
             release.package(&installed).unwrap(),
-            Some((Version::new(0, 10, 0), 150))
+            Some((Version::new(0, 10, 0), 200))
         );
         assert!(release.package(&Version::new(0, 10, 0)).unwrap().is_none());
         assert!(release.package(&Version::new(1, 0, 0)).unwrap().is_none());
@@ -382,86 +447,14 @@ mod tests {
 
     #[test]
     fn verifies_checksum_filename_and_digest_format() {
-        let archive = archive_name(&Version::new(0, 10, 0));
+        let package = package_name(&Version::new(0, 10, 0));
         let hash = "AB".repeat(32);
-        let sidecar = format!("{hash}  {archive}\r\n");
+        let sidecar = format!("{hash}  {package}\r\n");
         assert_eq!(
-            read_checksum(sidecar.as_bytes(), &archive).unwrap(),
+            read_checksum(sidecar.as_bytes(), &package).unwrap(),
             hash.to_lowercase()
         );
         assert!(read_checksum(sidecar.as_bytes(), "other.zip").is_err());
-        assert!(read_checksum(format!("xyz  {archive}").as_bytes(), &archive).is_err());
-    }
-
-    #[test]
-    fn installs_windows_package_and_rolls_back_when_executable_is_locked() {
-        let root = tempfile::Builder::new()
-            .prefix("ViME [更新] ")
-            .tempdir()
-            .unwrap();
-        let executable = root.path().join(EXECUTABLE);
-        let notes = root.path().join("README.md");
-        let user_file = root.path().join("local.txt");
-        fs::write(&executable, "old executable").unwrap();
-        fs::write(&notes, "old notes").unwrap();
-        fs::write(&user_file, "user's file").unwrap();
-
-        for locked in [true, false] {
-            let staged = Staged {
-                version: Version::new(0, 10, 0),
-                staging: tempfile::Builder::new()
-                    .prefix(".vime-update-")
-                    .tempdir_in(root.path())
-                    .unwrap(),
-                original_hash: file_sha256(&executable).unwrap(),
-                executable: executable.clone(),
-            };
-            let package = staged.staging.path().join("package");
-            let asset = root.path().join("assets/guide.txt");
-            fs::create_dir_all(package.join("assets")).unwrap();
-            fs::write(package.join(EXECUTABLE), "new executable").unwrap();
-            fs::write(package.join("README.md"), "new notes").unwrap();
-            fs::write(package.join("assets/guide.txt"), "new asset").unwrap();
-            // Permit hashing the running version while preventing replacement.
-            let handle = locked.then(|| {
-                fs::OpenOptions::new()
-                    .read(true)
-                    .share_mode(1)
-                    .open(&executable)
-                    .unwrap()
-            });
-            let output = staged
-                .installer(false, i32::MAX as u32)
-                .unwrap()
-                .env_remove("VIME_UPDATE_FAILED")
-                .output()
-                .unwrap();
-            drop(handle);
-            assert_eq!(
-                output.status.success(),
-                !locked,
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(
-                !staged.staging.path().exists(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert_eq!(
-                fs::read_to_string(&executable).unwrap(),
-                if locked {
-                    "old executable"
-                } else {
-                    "new executable"
-                }
-            );
-            assert_eq!(
-                fs::read_to_string(&notes).unwrap(),
-                if locked { "old notes" } else { "new notes" }
-            );
-            assert_eq!(asset.exists(), !locked);
-            assert_eq!(fs::read_to_string(&user_file).unwrap(), "user's file");
-        }
+        assert!(read_checksum(format!("xyz  {package}").as_bytes(), &package).is_err());
     }
 }
