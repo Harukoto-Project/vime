@@ -142,8 +142,10 @@ struct Surfaces {
 
 impl Surfaces {
     fn new(gl: Arc<eframe::glow::Context>, fonts: FontDefinitions) -> Result<Self, String> {
-        let keyboard = OverlaySurface::new(gl.clone(), fonts.clone(), visuals(), keyboard::SIZE)?;
-        match OverlaySurface::new(gl, fonts, visuals(), dashboard::SIZE) {
+        // 1935 × 954 pixels at the keyboard's original 860 × 424 logical size.
+        let keyboard =
+            OverlaySurface::new(gl.clone(), fonts.clone(), visuals(), keyboard::SIZE, 2.25)?;
+        match OverlaySurface::new(gl, fonts, visuals(), dashboard::SIZE, 1.0) {
             Ok(dashboard) => Ok(Self {
                 keyboard,
                 dashboard,

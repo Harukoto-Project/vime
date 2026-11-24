@@ -16,7 +16,8 @@ pub struct OverlaySurface {
     painter: egui_glow::Painter,
     gl: Arc<glow::Context>,
     target: Target,
-    size: [u32; 2],
+    texture_size: [u32; 2],
+    pixels_per_point: f32,
     pending: bool,
     retry_after: Option<Instant>,
 }
@@ -40,11 +41,13 @@ impl OverlaySurface {
         gl: Arc<glow::Context>,
         fonts: FontDefinitions,
         visuals: Visuals,
-        size: [u32; 2],
+        logical_size: [u32; 2],
+        pixels_per_point: f32,
     ) -> Result<Self, String> {
         let mut painter = egui_glow::Painter::new(gl.clone(), "", None, false)
             .map_err(|error| error.to_string())?;
-        let target = match make_target(&gl, size) {
+        let texture_size = logical_size.map(|axis| (axis as f32 * pixels_per_point).round() as u32);
+        let target = match make_target(&gl, texture_size) {
             Ok(target) => target,
             Err(error) => {
                 painter.destroy();
@@ -65,22 +68,15 @@ impl OverlaySurface {
             painter,
             gl,
             target,
-            size,
+            texture_size,
+            pixels_per_point,
             pending: false,
             retry_after: None,
         })
     }
 
     pub fn render<T>(&mut self, events: Vec<Event>, mut draw: impl FnMut(&mut Ui) -> T) -> T {
-        let screen_rect = Rect::from_min_size(
-            Pos2::ZERO,
-            Vec2::new(self.size[0] as f32, self.size[1] as f32),
-        );
-        let input = RawInput {
-            screen_rect: Some(screen_rect),
-            events,
-            ..RawInput::default()
-        };
+        let input = overlay_input(self.texture_size, self.pixels_per_point, events);
         let mut result = None;
         let mut output = self.context.run_ui(input, |ui| result = Some(draw(ui)));
         let shapes = self
@@ -97,9 +93,9 @@ impl OverlaySurface {
                 .get_parameter_framebuffer(glow::READ_FRAMEBUFFER_BINDING);
             self.gl
                 .bind_framebuffer(glow::FRAMEBUFFER, Some(self.target.framebuffer));
-            self.painter.clear(self.size, [0.0; 4]);
+            self.painter.clear(self.texture_size, [0.0; 4]);
             self.painter.paint_and_update_textures(
-                self.size,
+                self.texture_size,
                 output.pixels_per_point,
                 &shapes,
                 &mut output.textures_delta,
@@ -160,6 +156,28 @@ impl OverlaySurface {
         self.painter.destroy();
         self.target.destroy(&self.gl);
     }
+}
+
+pub(crate) fn overlay_input(
+    texture_size: [u32; 2],
+    pixels_per_point: f32,
+    events: Vec<Event>,
+) -> RawInput {
+    let screen_rect = Rect::from_min_size(
+        Pos2::ZERO,
+        Vec2::new(texture_size[0] as f32, texture_size[1] as f32) / pixels_per_point,
+    );
+    let mut input = RawInput {
+        screen_rect: Some(screen_rect),
+        events,
+        ..RawInput::default()
+    };
+    input
+        .viewports
+        .entry(input.viewport_id)
+        .or_default()
+        .native_pixels_per_point = Some(pixels_per_point);
+    input
 }
 
 fn make_target(gl: &glow::Context, size: [u32; 2]) -> Result<Target, String> {

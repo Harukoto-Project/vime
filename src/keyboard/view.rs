@@ -1200,18 +1200,20 @@ mod tests {
     fn vr_editor_actions_are_separate_from_the_text_hit_area() {
         let context = egui::Context::default();
         let mut keyboard = Keyboard::new(context.clone());
+        let input = || crate::overlay_surface::overlay_input([1935, 954], 2.25, vec![]);
         let hit = |keys: &VrKeys, x, y| keys.action_at([x / SIZE[0] as f32, y / SIZE[1] as f32]);
-        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+        let mut output = context.run_ui(input(), |ui| {
             let keys = show_vr(ui, &keyboard, Destination::Osc, true);
             assert!(hit(&keys, 615., 97.).is_none());
             assert!(hit(&keys, 679., 97.).is_none());
             assert!(hit(&keys, 754., 97.).is_none());
             assert!(matches!(hit(&keys, 813., 97.), Some(Action::Paste)));
         });
+        assert_eq!(output.pixels_per_point, 2.25);
         output.textures_delta.clear();
         keyboard.apply(Action::Key('a'));
         let mut clear = None;
-        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+        let mut output = context.run_ui(input(), |ui| {
             let keys = show_vr(ui, &keyboard, Destination::Osc, true);
             assert!(matches!(hit(&keys, 500., 97.), Some(Action::MoveCaret(_))));
             clear = hit(&keys, 615., 97.);
