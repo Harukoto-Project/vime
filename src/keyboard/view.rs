@@ -349,7 +349,11 @@ impl Board<'_> {
         let ready = !text.trim().is_empty();
 
         let rect = self.box_abs(22., TOP, 616., HEIGHT);
-        let face = if ready { Face::Selected } else { Face::Disabled };
+        let face = if ready {
+            Face::Selected
+        } else {
+            Face::Disabled
+        };
         let ink = self.button_face(
             rect,
             tr("翻訳を入力欄に反映"),
@@ -360,10 +364,7 @@ impl Board<'_> {
             Phase::Failed(error) => (error.as_str(), self.palette.error),
             _ if ready => (text, ink),
             Phase::Waiting | Phase::Working => (tr("翻訳中…"), self.palette.secondary),
-            _ => (
-                tr("入力すると翻訳が表示されます"),
-                self.palette.secondary,
-            ),
+            _ => (tr("入力すると翻訳が表示されます"), self.palette.secondary),
         };
         let mut job = LayoutJob::simple(
             message.to_owned(),
@@ -1414,10 +1415,22 @@ mod tests {
         let send_top = |keyboard: &Keyboard| {
             let mut found = None;
             let mut output = context.run_ui(egui::RawInput::default(), |ui| {
-                let keys = show_vr(ui, keyboard, Destination::Osc, KeyboardTheme::Dark, Default::default(), true);
+                let keys = show_vr(
+                    ui,
+                    keyboard,
+                    Destination::Osc,
+                    KeyboardTheme::Dark,
+                    Default::default(),
+                    true,
+                );
                 found = Some((
-                    keys.keys.iter().find(|(_, action)| matches!(action, Action::Send)).map(|(rect, _)| rect.top() - keys.rect.top()),
-                    keys.keys.iter().any(|(_, action)| matches!(action, Action::CycleTranslationTarget)),
+                    keys.keys
+                        .iter()
+                        .find(|(_, action)| matches!(action, Action::Send))
+                        .map(|(rect, _)| rect.top() - keys.rect.top()),
+                    keys.keys
+                        .iter()
+                        .any(|(_, action)| matches!(action, Action::CycleTranslationTarget)),
                 ));
             });
             output.textures_delta.clear();

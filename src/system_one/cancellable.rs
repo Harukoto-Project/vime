@@ -281,7 +281,9 @@ unsafe extern "system" fn on_status(
         WINHTTP_CALLBACK_STATUS_DATA_AVAILABLE if size as usize >= size_of::<u32>() => {
             Event::Complete(
                 status,
-                unsafe { data.cast::<u32>().read_unaligned() }.to_le_bytes().to_vec(),
+                unsafe { data.cast::<u32>().read_unaligned() }
+                    .to_le_bytes()
+                    .to_vec(),
             )
         }
         WINHTTP_CALLBACK_STATUS_READ_COMPLETE if size > 0 => Event::Complete(

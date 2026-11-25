@@ -2,9 +2,9 @@
 
 ViME는 Windows에서 실행되는 SteamVR용 오픈 소스 IME 키보드입니다. VR 컨트롤러로 일본어, 영어, 한국어를 입력하고 VRChat Chatbox나 호환되는 SteamVR 앱으로 보낼 수 있습니다.
 
-**[Windows 버전 다운로드(GitHub Releases)](https://github.com/Harukoto-Project/vime/releases)**
+**[Windows 버전 다운로드(GitHub Releases)](https://github.com/Harukoto-Project/vime/releases/latest)**
 
-[설치](#설치) · [자동 실행 및 트레이](#steamvr-자동-실행과-windows-시스템-트레이) · [VRChat에서 사용](#vrchat에-메시지-보내기) · [입력 및 변환](#언어-전환-및-문자-변환) · [오타 수정](#오타-수정) · [소스에서 실행](#소스에서-실행)
+[설치](#설치) · [자동 실행 및 트레이](#steamvr-자동-실행과-windows-시스템-트레이) · [VRChat에서 사용](#vrchat에-메시지-보내기) · [입력 및 변환](#언어-전환-및-문자-변환) · [번역](#번역) · [오타 수정](#오타-수정) · [소스에서 실행](#소스에서-실행)
 
 [English](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
@@ -19,7 +19,7 @@ ViME는 Windows에서 실행되는 SteamVR용 오픈 소스 IME 키보드입니�
 
 ## 설치
 
-1. [Releases](https://github.com/Harukoto-Project/vime/releases)에서 `ViME-<버전>-windows-x64.msi`를 다운로드합니다.
+1. [Releases](https://github.com/Harukoto-Project/vime/releases/latest)에서 `ViME-<버전>-windows-x64.msi`를 다운로드합니다.
 2. MSI를 실행한 뒤 Windows 시작 메뉴에서 **ViME**를 엽니다. 배포 버전은 Windows x64용이며 Rust를 설치할 필요가 없습니다.
 3. 처음 실행하면 오타 수정 설정을 선택합니다. **추천 설정으로 시작**을 선택하면 로컬 d1-2B와 CUDA 실행 환경, 일본어 오변환 데이터를 다운로드합니다. 처음 설치할 때는 약 1.9 GB를 받습니다. 키보드부터 사용하려면 **나중에 설정**을 선택하세요.
 4. VR에서 사용하려면 SteamVR을 실행합니다. ViME를 먼저 실행했다면 Windows 앱에서 **SteamVR에 연결**을 누르세요. 연결하기 전에도 Windows 앱의 키보드 미리보기에서 입력을 시험해 볼 수 있습니다.
@@ -49,6 +49,10 @@ ViME 창을 닫아도 앱이 시스템 트레이에서 계속 실행되므로 VR
 
 왼쪽과 오른쪽 포인터는 각각 그려지며 SteamVR 프레임에 맞춰 갱신됩니다. 키보드 화면에 변화가 없어도 컨트롤러의 움직임을 따라갑니다. 키보드는 더 높은 픽셀 밀도로 그려져 글자가 또렷하게 보입니다.
 
+어느 쪽 컨트롤러로든 패널을 가리킨 채 그립을 누르면 VR 키보드를 옮길 수 있습니다. 키보드가 열려 있어도 이동 스틱을 사용할 수 있습니다. VR 패널은 다크와 라이트 테마 모두 반투명합니다.
+
+VRChat에 입력 중 상태를 표시하려면 **설정 → VRChat에 입력 중 상태 보내기**를 켜세요. 기본값은 꺼짐입니다.
+
 **OSCQuery로 자동 검색**은 같은 PC에서 실행 중인 VRChat의 수신 UDP 포트를 찾습니다. 새 설정에서는 기본적으로 켜져 있습니다. v1.0.0에서 저장한 설정을 이어서 사용한다면 **설정**에서 자동 검색을 켜고 저장하세요. 자동 검색이 꺼져 있거나 포트를 찾지 못하면 설정된 UDP 포트(기본값 `9000`)를 사용합니다. [VRChat OSCQuery 공식 가이드](https://docs.vrchat.com/docs/oscquery)
 
 SteamVR 대시보드의 **ViME** 탭에서도 키보드와 전송 설정을 열고 컨트롤러 할당을 편집할 수 있습니다.
@@ -64,7 +68,17 @@ Windows에 Noto Sans JP가 설치되어 있으면 이 글꼴을 사용합니다.
 - 왼쪽 아래의 **😃**를 누르면 이모지, 얼굴 문자, 기호 목록이 열립니다. 영어 모드에서는 `:cat:` 같은 단축 이름으로 이모지를 찾을 수도 있습니다.
 - 아직 확정하지 않은 일본어 입력에서 **Backspace**를 누르면 화면에 표시된 문자 한 개가 지워집니다. 예를 들어 `きゃ`는 `き`가 됩니다. 입력 중인 로마자는 **Backspace** 뒤에도 편집할 수 있으므로 잘못 입력한 글자를 고치고 같은 음을 이어서 입력할 수 있습니다. `kyi`, `swa`, `tsa`, `fwa`, `qa`, `xn` 같은 표기도 지원합니다. **Backspace** 또는 **Space**를 길게 누르면 동작이 반복됩니다. 키를 누르면 타건음이 납니다.
 
+일본어를 입력하는 동안 현재 읽기를 바탕으로 단어를 예측합니다. 기본적으로 선택한 단어를 학습해 다음 변환 후보와 예측에 반영합니다. 학습 단어는 `%LOCALAPPDATA%\ViME\learned.tsv`에 저장됩니다. **설정 → 학습 및 예측 변환**에서 학습을 끄거나 저장한 단어를 삭제할 수 있습니다. `きょう`나 `いま`를 변환하면 날짜와 시간이 표시되고, `ほし` 같은 읽기로 기호와 이모지도 찾을 수 있습니다. 일본어 입력에서 괄호 키는 `「`와 `」`를 입력합니다.
+
 ![일본어 변환 후보에 전각 パーティー와 반각 ﾊﾟｰﾃｨｰ가 함께 표시된다.](assets/vr-conversion.png)
+
+## 번역
+
+1. OpenAI 호환 번역 서버를 준비합니다. 예를 들어 PC에서 LM Studio를 실행하고 모델을 불러옵니다.
+2. **설정 → 번역**에서 **입력란 위에 번역 표시**를 켭니다. API URL(예: `http://127.0.0.1:1234/v1`), 번역 언어, 그리고 필요한 경우 모델 이름과 API 키를 설정한 뒤 저장합니다.
+3. 입력을 잠시 멈추면 일본어, 영어, 한국어 중 선택한 언어로 번역이 표시됩니다. 번역을 누르면 입력란에 반영되고, 옆의 언어 버튼으로 번역 언어를 바꿀 수 있습니다.
+
+번역은 기본적으로 꺼져 있습니다. 켜면 입력한 텍스트 전체를 설정한 API로 전송합니다.
 
 ## 오타 수정
 
@@ -121,3 +135,5 @@ cargo run --release --locked
 ViME에는 일본어 Wikipedia 입력 오류 데이터셋의 사본이 들어 있지 않습니다. 설정의 「일본어 오변환 데이터」에서 **다운로드**를 누르면 ViME가 교토대학에서 [JWTD v2](https://nlp.ist.i.kyoto-u.ac.jp/EN/index.php?JWTD)(교토대학 언어미디어 연구실, [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.ko))를 직접 받아 편집자가 고친 한자어를 집계합니다. 남는 것은 그 단어 표뿐이며 `%LOCALAPPDATA%\ViME\misconversions.tsv`에 저장됩니다. 이 표는 공유되지 않고 CC BY-SA 3.0 그대로입니다. Tanaka, Murawaki, Kawahara, Kurohashi, NLP 2021. [JWTD v2 논문](https://www.anlp.jp/proceedings/annual_meeting/2021/pdf_dir/E8-3.pdf)
 
 타건음은 unicaegames의 [Keyboard Soundpack #1](https://opengameart.org/node/122745)([CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/))을 사용합니다. 키보드 아이콘은 MUI를 통해 제공되는 Google의 [Material Icons](https://mui.com/material-ui/material-icons/)([Apache License 2.0](LICENSE))를 사용합니다. 로컬 추론에는 [llama.cpp](https://github.com/ggml-org/llama.cpp)와 [Liquid AI의 d1-2B Q4_K_M](https://huggingface.co/LiquidAI/d1-2B-GGUF)을 사용합니다.
+
+일본어 변환 사전과 기호 데이터는 [Mozc](https://github.com/google/mozc)에서 가져왔습니다. [BSD 라이선스](https://github.com/Harukoto-Project/vime/blob/main/src/ime/MOZC_LICENSE)

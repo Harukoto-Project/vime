@@ -2,9 +2,9 @@
 
 ViMEは、VR内で日本語・英語・韓国語を入力できる、Windows向けのオープンソースIMEキーボードです。コントローラーでキーを押し、入力した文章をVRChatのChatboxや対応するSteamVRアプリに送れます。
 
-**[Windows版のダウンロード（GitHub Releases）](https://github.com/Harukoto-Project/vime/releases)**
+**[Windows版のダウンロード（GitHub Releases）](https://github.com/Harukoto-Project/vime/releases/latest)**
 
-[インストール](#インストール) · [自動起動とトレイ](#steamvrでの自動起動とwindowsの通知領域) · [VRChatで使う](#vrchatに送る) · [入力と変換](#言語の切り替えと変換) · [誤字修正](#誤字修正) · [ソースから起動](#ソースから起動する)
+[インストール](#インストール) · [自動起動とトレイ](#steamvrでの自動起動とwindowsの通知領域) · [VRChatで使う](#vrchatに送る) · [入力と変換](#言語の切り替えと変換) · [翻訳](#翻訳) · [誤字修正](#誤字修正) · [ソースから起動](#ソースから起動する)
 
 [English](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
@@ -19,7 +19,7 @@ ViMEは、VR内で日本語・英語・韓国語を入力できる、Windows向�
 
 ## インストール
 
-1. [Releases](https://github.com/Harukoto-Project/vime/releases) から `ViME-<バージョン>-windows-x64.msi` をダウンロードします。
+1. [Releases](https://github.com/Harukoto-Project/vime/releases/latest) から `ViME-<バージョン>-windows-x64.msi` をダウンロードします。
 2. MSIを実行し、インストール後にWindowsのスタートメニューから **ViME** を起動します。配布版はWindows x64向けで、Rustのインストールは不要です。
 3. 初回画面で誤字修正を設定します。**おすすめ設定で始める**を選ぶと、ローカル d1-2B と CUDA 用の実行環境、日本語の誤変換データのダウンロードが始まります。初回は合計約 1.9 GB です。まずキーボードを試す場合は **あとで設定する**を選べます。
 4. VRで使うときはSteamVRを起動します。ViMEが先に起動していた場合は、Windows画面の **SteamVR に接続** を押してください。Windows画面のキーボードプレビューは、SteamVRに接続する前でも試せます。
@@ -49,6 +49,10 @@ ViME のウィンドウを閉じても通知領域に常駐し、VR キーボー
 
 左右のポインターは別々に描画され、SteamVR のフレームに合わせて更新されます。キーボードの表示が変わらない間も、コントローラーの動きに追従します。キーボードは高い画素密度で描画されるため、文字がくっきり表示されます。
 
+左右どちらのコントローラーでも、パネルを指してグリップを握ると VR キーボードを移動できます。キーボードを開いたままでも移動用のスティックを使えます。VR のパネルはダーク・ライトともに半透明です。
+
+VRChat に入力中であることを表示したい場合は、**設定 → 入力中状態をVRChatに送信**をオンにします。既定ではオフです。
+
 **OSCQuery で自動検出**を使うと、同じ PC で動く VRChat の受信用 UDP ポートを検出できます。新規設定では既定でオンです。v1.0.0 で保存した設定を引き継ぐ場合は、**設定**で自動検出をオンにして保存してください。自動検出がオフ、またはポートを検出できない間は、設定済みの UDP ポート（既定は `9000`）を使います。 [VRChatのOSCQuery公式ガイド](https://docs.vrchat.com/docs/oscquery)
 
 SteamVRダッシュボードの **ViME** タブからも、キーボード、送信設定、コントローラーの割り当てを開けます。
@@ -64,7 +68,17 @@ Windowsに Noto Sans JP がインストールされている場合は、その�
 - **左下の 😃** で絵文字・顔文字・記号の一覧を開きます。英語入力では `:cat:` のような短縮名からも絵文字を選べます。
 - 日本語の未確定入力では、**Backspace** を押すと表示上の1文字を削除します。たとえば `きゃ` は `き` になります。入力途中のローマ字は **Backspace** のあとも編集できるため、打ち間違えた文字を直して同じ音を入力し直せます。`kyi`、`swa`、`tsa`、`fwa`、`qa`、`xn` などの綴りにも対応しています。**Backspace** と **Space** は押し続けると連続入力できます。キーを押すと打鍵音が鳴ります。
 
+入力中の読みから変換候補を予測します。選んだ語は既定で学習し、次の変換候補や予測に使います。学習した語は `%LOCALAPPDATA%\ViME\learned.tsv` に保存され、**設定 → 学習・予測変換**から学習の無効化や履歴の削除ができます。`きょう` や `いま` で日付と時刻、`ほし` などの読みで記号や絵文字も変換できます。日本語入力のかっこキーは `「` と `」` を入力します。
+
 ![日本語の変換欄に、全角の「パーティー」と半角の「ﾊﾟｰﾃｨｰ」が並ぶ。](assets/vr-conversion.png)
+
+## 翻訳
+
+1. OpenAI 互換の翻訳用サーバーを用意します。たとえば LM Studio を PC 上で起動し、モデルをロードします。
+2. **設定 → 翻訳**で **入力欄の上に翻訳を表示する**をオンにし、API URL（例 `http://127.0.0.1:1234/v1`）、翻訳先、必要に応じてモデル名と API キーを設定し、保存します。
+3. 入力を止めると、日本語・英語・韓国語から選んだ言語への翻訳が表示されます。翻訳結果を押すと入力欄に反映でき、隣の言語ボタンで翻訳先を切り替えられます。
+
+翻訳は既定でオフです。有効にすると、入力した文章の全文が設定先の API に送信されます。
 
 ## 誤字修正
 
@@ -121,3 +135,5 @@ cargo run --release --locked
 ViME には日本語Wikipedia入力誤りデータセットの複製は含まれません。設定の「日本語の誤変換データ」で **ダウンロード** を押すと、ViME が京都大学から [JWTD v2](https://nlp.ist.i.kyoto-u.ac.jp/EN/index.php?JWTD)（京都大学 言語メディア研究室、[CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.ja)）を直接取得し、編集者が直した漢字の語を集計します。残るのはその語の表だけで、`%LOCALAPPDATA%\ViME\misconversions.tsv` に保存されます。この表は共有されず、CC BY-SA 3.0 のままです。田中佑、村脇有吾、河原大輔、黒橋禎夫。言語処理学会第27回年次大会、2021年。[JWTD v2 の論文](https://www.anlp.jp/proceedings/annual_meeting/2021/pdf_dir/E8-3.pdf)
 
 打鍵音は unicaegames の [Keyboard Soundpack #1](https://opengameart.org/node/122745)（[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)）を使用しています。キーボードのアイコンは、MUI 経由で Google の [Material Icons](https://mui.com/material-ui/material-icons/)（[Apache License 2.0](LICENSE)）を使用しています。ローカル推論には [llama.cpp](https://github.com/ggml-org/llama.cpp) と [Liquid AI の d1-2B Q4_K_M](https://huggingface.co/LiquidAI/d1-2B-GGUF) を使用します。
+
+日本語の変換辞書と記号データは [Mozc](https://github.com/google/mozc) に由来します（[BSD ライセンス](https://github.com/Harukoto-Project/vime/blob/main/src/ime/MOZC_LICENSE)）。

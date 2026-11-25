@@ -579,6 +579,8 @@ pub struct Settings {
     pub typo: TypoSettings,
     pub report_typos: bool,
     pub translation: TranslationSettings,
+    /// Whether the words the user chooses are learned for later candidates.
+    pub learn_words: bool,
 }
 
 impl Default for Settings {
@@ -596,6 +598,7 @@ impl Default for Settings {
             typo: TypoSettings::default(),
             report_typos: true,
             translation: TranslationSettings::default(),
+            learn_words: true,
         }
     }
 }

@@ -2,9 +2,9 @@
 
 ViME is an open-source IME keyboard for SteamVR on Windows. Type in Japanese, English, or Korean with your VR controllers and send text to the VRChat Chatbox or a compatible SteamVR app.
 
-**[Download for Windows (GitHub Releases)](https://github.com/Harukoto-Project/vime/releases)**
+**[Download for Windows (GitHub Releases)](https://github.com/Harukoto-Project/vime/releases/latest)**
 
-[Install](#install) · [Startup and system tray](#steamvr-startup-and-the-windows-system-tray) · [VRChat](#send-a-message-to-vrchat) · [Typing and conversion](#switch-languages-and-convert-text) · [Typo correction](#typo-correction) · [Run from source](#run-from-source)
+[Install](#install) · [Startup and system tray](#steamvr-startup-and-the-windows-system-tray) · [VRChat](#send-a-message-to-vrchat) · [Typing and conversion](#switch-languages-and-convert-text) · [Translation](#translation) · [Typo correction](#typo-correction) · [Run from source](#run-from-source)
 
 [English](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
@@ -19,7 +19,7 @@ ViME is an open-source IME keyboard for SteamVR on Windows. Type in Japanese, En
 
 ## Install
 
-1. Download `ViME-<version>-windows-x64.msi` from [Releases](https://github.com/Harukoto-Project/vime/releases).
+1. Download `ViME-<version>-windows-x64.msi` from [Releases](https://github.com/Harukoto-Project/vime/releases/latest).
 2. Run the installer, then open **ViME** from the Windows Start menu. The release build runs on Windows x64 and requires no Rust installation.
 3. Choose a typo correction setup on first launch. **Start with the recommended setup** downloads local d1-2B, its CUDA runtime, and Japanese misconversion data (about 1.9 GB on a fresh setup). Choose **Set up later** to try the keyboard first.
 4. Start SteamVR for VR use. If ViME is already running, select **Connect to SteamVR** in the Windows app. You can try the keyboard in the Windows preview before connecting.
@@ -49,6 +49,10 @@ Next to the text field, **×** clears the text, and the copy and paste buttons u
 
 The left and right pointers render independently and update in sync with SteamVR frames, so they can track your controllers between keyboard redraws. The keyboard is drawn at a higher pixel density for sharper text.
 
+Point either controller at the panel and hold its grip to move the VR keyboard. You can still use the movement stick while the keyboard is open. The VR panel is translucent in both themes.
+
+To show when you are typing, turn on **Settings → Send typing status to VRChat**. This is off by default.
+
 **Discover via OSCQuery** finds VRChat’s receiving UDP port on the same PC. It is on by default for new configurations. If you are upgrading with saved v1.0.0 settings, enable it in **Settings** and save. ViME uses the configured UDP port (`9000` by default) while discovery is off or no port is detected. [Official VRChat OSCQuery guide](https://docs.vrchat.com/docs/oscquery)
 
 The **ViME** tab in the SteamVR dashboard gives you access to the keyboard, output settings, and controller bindings.
@@ -64,7 +68,17 @@ ViME uses Noto Sans JP when it is installed on Windows. Otherwise it falls back 
 - Open the emoji, kaomoji, and symbol palette with **😃** at the bottom left. In English mode, you can also look up emoji with shortcodes such as `:cat:`.
 - In unconfirmed Japanese input, **Backspace** removes one displayed character at a time, so `きゃ` becomes `き`. Unfinished romaji stays editable after **Backspace**, so you can correct a mistyped letter and finish the syllable. Spellings such as `kyi`, `swa`, `tsa`, `fwa`, `qa`, and `xn` are supported. Hold **Backspace** or **Space** to repeat the action. Key presses play a click sound.
 
+ViME predicts Japanese words from the reading as you type. By default, it learns the words you choose and uses them to rank later candidates and predictions. Learned words are stored in `%LOCALAPPDATA%\ViME\learned.tsv`. In **Settings → Learning and predictions**, you can turn learning off or clear the saved words. Convert `きょう` or `いま` for dates and times, or a reading such as `ほし` for symbols and emoji. In Japanese input, the bracket keys type `「` and `」`.
+
 ![The Japanese candidate bar offers both full-width パーティー and half-width ﾊﾟｰﾃｨｰ.](assets/vr-conversion.png)
+
+## Translation
+
+1. Start an OpenAI-compatible server for translation. For example, start LM Studio on your PC and load a model.
+2. In **Settings → Translation**, turn on **Show a translation above the input box**. Set the API URL (for example, `http://127.0.0.1:1234/v1`), the target language, and the model name and API key if needed, then save.
+3. When you pause typing, the translation appears in the selected language: Japanese, English, or Korean. Select the result to put it in the input box, or use the language button beside it to change the target language.
+
+Translation is off by default. When enabled, ViME sends the full text you type to the configured API.
 
 ## Typo correction
 
@@ -121,3 +135,5 @@ The executable is built at `target/release/vime.exe`. See the [contribution guid
 ViME contains no copy of the Japanese Wikipedia Typo Dataset. If you press **Download** under *Japanese misconversion data* in the settings, ViME fetches [JWTD v2](https://nlp.ist.i.kyoto-u.ac.jp/EN/index.php?JWTD) (Kyoto University Language Media Processing Lab, [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/)) directly from Kyoto University and counts which kanji words editors corrected. Only that table of words is kept, in `%LOCALAPPDATA%\ViME\misconversions.tsv`; it is not shared and stays under CC BY-SA 3.0. Tanaka, Murawaki, Kawahara, and Kurohashi, NLP 2021. [JWTD v2 paper](https://www.anlp.jp/proceedings/annual_meeting/2021/pdf_dir/E8-3.pdf)
 
 Key sounds come from unicaegames’ [Keyboard Soundpack #1](https://opengameart.org/node/122745) ([CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)). Keyboard icons are from Google’s [Material Icons](https://mui.com/material-ui/material-icons/) by way of MUI ([Apache License 2.0](LICENSE)). Local inference uses [llama.cpp](https://github.com/ggml-org/llama.cpp) and [Liquid AI’s d1-2B Q4_K_M](https://huggingface.co/LiquidAI/d1-2B-GGUF).
+
+The Japanese conversion dictionary and symbol data are derived from [Mozc](https://github.com/google/mozc) ([BSD license](https://github.com/Harukoto-Project/vime/blob/main/src/ime/MOZC_LICENSE)).

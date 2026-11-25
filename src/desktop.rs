@@ -231,6 +231,7 @@ impl App {
         let mut keyboard = Keyboard::new(creation.egui_ctx.clone());
         keyboard.configure_typo(&settings.typo, settings.report_typos, &directory);
         keyboard.configure_translation(&settings.translation);
+        keyboard.configure_learning(settings.learn_words, &directory);
         let mut update = Update::default();
         if !cfg!(debug_assertions) {
             update.check(&creation.egui_ctx);
@@ -309,12 +310,16 @@ impl App {
         proposed.translation.url = proposed.translation.url.trim().to_owned();
         proposed.translation.model = proposed.translation.model.trim().to_owned();
         if let Some(edit) = &self.translation_key_edit {
-            let scope = proposed.translation.api_key_scope().ok_or_else(|| {
-                tr("翻訳先の API URL を入力してください").to_owned()
-            })?;
+            let scope = proposed
+                .translation
+                .api_key_scope()
+                .ok_or_else(|| tr("翻訳先の API URL を入力してください").to_owned())?;
             let result = match edit {
                 Some(key) => vime::credentials::protect(key.trim(), &scope).map(|protected| {
-                    proposed.translation.protected_api_keys.insert(scope, protected);
+                    proposed
+                        .translation
+                        .protected_api_keys
+                        .insert(scope, protected);
                 }),
                 None => {
                     proposed.translation.protected_api_keys.remove(&scope);
@@ -367,6 +372,8 @@ impl App {
         );
         self.keyboard
             .configure_translation(&self.settings.translation);
+        self.keyboard
+            .configure_learning(self.settings.learn_words, &self.directory);
         self.dashboard.redraw = true;
         if let Some(vr) = &mut self.vr
             && let Err(error) = vr.set_width(self.settings.overlay_width)
@@ -475,10 +482,8 @@ impl App {
         self.settings.translation.target = target;
         self.draft.translation.target = target;
         if let Err(error) = self.settings.save(&self.directory) {
-            self.keyboard.status(tr_args(
-                "設定を保存できません ({0})",
-                &[&error.to_string()],
-            ));
+            self.keyboard
+                .status(tr_args("設定を保存できません ({0})", &[&error.to_string()]));
         }
         self.keyboard
             .configure_translation(&self.settings.translation);
@@ -1116,6 +1121,10 @@ impl App {
             ui.add_space(10.);
             ui.separator();
             ui.add_space(10.);
+            self.learning_settings(ui);
+            ui.add_space(10.);
+            ui.separator();
+            ui.add_space(10.);
             if let Some(action) = self.update.show(ui) {
                 self.update_action(action, ui.ctx());
             }
@@ -1254,10 +1263,7 @@ impl App {
         {
             self.translation_key_edit = (!text.trim().is_empty()).then_some(Some(text));
         }
-        if saved
-            && !removed
-            && ui.small_button(tr("保存済みのキーを削除")).clicked()
-        {
+        if saved && !removed && ui.small_button(tr("保存済みのキーを削除")).clicked() {
             self.translation_key_edit = Some(None);
         }
         ui.label(
@@ -1266,6 +1272,39 @@ impl App {
             ))
             .small(),
         );
+    }
+
+    /// Whether chosen words are learned for predictions, and the way to forget them.
+    fn learning_settings(&mut self, ui: &mut Ui) {
+        ui.label(RichText::new(tr("学習・予測変換")).weak());
+        widgets::checkbox(
+            ui,
+            &mut self.draft.learn_words,
+            tr("選んだ語を学習して、変換候補と予測に使う"),
+        );
+        ui.label(
+            RichText::new(tr("学習した語は、この PC にだけ保存されます"))
+                .small()
+                .weak(),
+        );
+        let count = self.keyboard.learned_count();
+        if ui
+            .add_enabled(
+                count > 0,
+                Button::new(tr_args(
+                    "学習した語をすべて削除（{0} 件）",
+                    &[&count.to_string()],
+                )),
+            )
+            .clicked()
+            && let Err(error) = self.keyboard.forget_learned()
+        {
+            self.settings_error = true;
+            self.settings_message = tr_args(
+                "学習した語を削除できませんでした ({0})",
+                &[&error.to_string()],
+            );
+        }
     }
 
     fn typo_report_settings(&mut self, ui: &mut Ui) {

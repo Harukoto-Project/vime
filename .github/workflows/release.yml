@@ -66,6 +66,7 @@ jobs:
           $name = "ViME-$env:VERSION-windows-x64"
           New-Item -ItemType Directory -Path "dist/$name/assets" -Force | Out-Null
           Copy-Item target/release/vime.exe, LICENSE, README.md, README.ja.md, README.ko.md, CONTRIBUTING.md "dist/$name"
+          Copy-Item src/ime/MOZC_LICENSE "dist/$name"
           Copy-Item assets/vr-keyboard.png, assets/vr-conversion.png "dist/$name/assets"
           Copy-Item assets/readme "dist/$name/assets" -Recurse -Force
           $engines = Get-Content src/local_d1/engine.json -Raw | ConvertFrom-Json

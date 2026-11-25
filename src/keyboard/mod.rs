@@ -192,7 +192,9 @@ impl Keyboard {
 
     /// The translation to show above the editor, if translation is on.
     pub fn translation(&self) -> Option<&Translator> {
-        self.translator.as_ref().filter(|translator| translator.enabled())
+        self.translator
+            .as_ref()
+            .filter(|translator| translator.enabled())
     }
 
     pub fn configure_typo(
@@ -207,6 +209,21 @@ impl Keyboard {
         if let Some(typo) = &mut self.typo {
             typo.configure(settings, report_typos);
         }
+    }
+
+    /// Turns the learning of chosen words on or off. The words are kept in
+    /// `directory`.
+    pub fn configure_learning(&mut self, enabled: bool, directory: &Path) {
+        self.composer.configure_learning(enabled, directory);
+    }
+
+    /// How many words were learned.
+    pub fn learned_count(&self) -> usize {
+        self.composer.learned_count()
+    }
+
+    pub fn forget_learned(&mut self) -> std::io::Result<()> {
+        self.composer.forget_learned()
     }
 
     pub fn typo_suggestion(&self) -> Option<&str> {
@@ -440,6 +457,10 @@ impl Keyboard {
                 self.refresh_candidates(&reading);
             }
         }
+        if self.composer.learning_pending() {
+            // A frame is needed to save the words once the choices have settled.
+            self.context.request_repaint_after(Duration::from_secs(3));
+        }
         self.status("");
     }
 
@@ -507,6 +528,7 @@ impl Keyboard {
     }
 
     pub fn poll_candidates(&mut self) {
+        self.composer.save_learned_when_due();
         if let Some(typo) = &mut self.typo
             && typo.poll(&self.composer)
         {
