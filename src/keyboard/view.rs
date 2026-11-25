@@ -221,14 +221,24 @@ impl Board<'_> {
     }
 
     fn background(&self, shift: f32) {
-        // Use the original overlay's alpha for the panel and keep the controls crisp.
+        // The light panel needs more transparency for the scene to show through.
+        let opacity = if self.palette.dark { 238 } else { 204 };
         self.ui.painter().rect(
             self.box_abs(4., 4., 852., 416. + shift),
             24. * self.scale,
-            self.palette.panel.gamma_multiply_u8(238),
+            self.palette.panel.gamma_multiply_u8(opacity),
             Stroke::new(self.scale, self.palette.border),
             StrokeKind::Inside,
         );
+    }
+
+    fn surface_fill(&self, color: Color32) -> Color32 {
+        if self.palette.dark {
+            color
+        } else {
+            // These fills sit on top of the panel. An opaque fill would hide the scene.
+            color.gamma_multiply_u8(128)
+        }
     }
 
     fn header(&mut self, keyboard: &Keyboard, can_close: bool) {
@@ -258,9 +268,11 @@ impl Board<'_> {
             self.palette.secondary,
         );
         let track = self.box_at(256., 15., 348., 40.);
-        self.ui
-            .painter()
-            .rect_filled(track, 10. * self.scale, self.palette.track);
+        self.ui.painter().rect_filled(
+            track,
+            10. * self.scale,
+            self.surface_fill(self.palette.track),
+        );
         for (index, language) in Language::ALL.into_iter().enumerate() {
             self.button(
                 self.box_at(259. + index as f32 * 114., 18., 114., 34.),
@@ -401,7 +413,7 @@ impl Board<'_> {
         painter.rect(
             rect,
             12. * self.scale,
-            self.palette.input,
+            self.surface_fill(self.palette.input),
             Stroke::new(self.scale, self.palette.input_border),
             StrokeKind::Inside,
         );
@@ -954,6 +966,7 @@ impl Board<'_> {
             ],
             8. * self.scale,
         );
+        let fill = self.surface_fill(fill);
         let center = Pos2::new(bottom.center().x, top.center().y);
         let mut mesh = Mesh::default();
         mesh.colored_vertex(center, fill);
@@ -1130,6 +1143,11 @@ impl Board<'_> {
         let enabled = !matches!(face, Face::Disabled | Face::DisabledSubtle);
         let (hovered, pressed) = self.button_interaction(rect, label, enabled, action);
         let (fill, border, text) = face.colors(self.palette, hovered, pressed);
+        let fill = if matches!(face, Face::Primary) {
+            fill
+        } else {
+            self.surface_fill(fill)
+        };
         self.ui.painter().rect(
             rect,
             8. * self.scale,
@@ -1320,6 +1338,14 @@ mod tests {
                 }
             });
             initial.textures_delta.clear();
+            if theme == KeyboardTheme::Light {
+                for (width, alpha) in [(852., 204), (616., 128)] {
+                    assert!(initial.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, Shape::Rect(rect)
+                            if rect.rect.width() == width && rect.fill.a() == alpha)
+                    }));
+                }
+            }
             let mut output = context.run_ui(egui::RawInput::default(), |ui| {
                 show_vr(
                     ui,
@@ -1341,7 +1367,9 @@ mod tests {
             });
             output.textures_delta.clear();
             let palette = Palette::for_theme(theme);
+            let control_opacity = if palette.dark { 255 } else { 128 };
             for (target, color) in targets.into_iter().zip([palette.hover, palette.pressed]) {
+                let color = color.gamma_multiply_u8(control_opacity);
                 assert!(output.shapes.iter().any(|shape| {
                     matches!(&shape.shape, Shape::Rect(rect) if rect.rect == target && rect.fill == color)
                 }));
