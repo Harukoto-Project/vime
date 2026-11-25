@@ -69,6 +69,26 @@ pub fn anchor(head: &Matrix) -> Matrix {
     }))
 }
 
+/// Express a standing-space transform in the controller's local coordinates.
+pub fn relative_transform(controller: &Matrix, panel: &Matrix) -> Matrix {
+    let delta = std::array::from_fn(|i| panel.0[i][3] - controller.0[i][3]);
+    Matrix(std::array::from_fn(|axis| {
+        let basis = controller.0.map(|row| row[axis]);
+        let [x, y, z] = std::array::from_fn(|column| dot(basis, panel.0.map(|row| row[column])));
+        [x, y, z, dot(basis, delta)]
+    }))
+}
+
+/// Bring a controller-local transform back into standing space.
+pub fn compose(controller: &Matrix, local: &Matrix) -> Matrix {
+    Matrix(controller.0.map(|[x, y, z, position]| {
+        let mut row =
+            std::array::from_fn(|i| x * local.0[0][i] + y * local.0[1][i] + z * local.0[2][i]);
+        row[3] += position;
+        row
+    }))
+}
+
 pub fn hit(panel: &Matrix, aim: &Matrix, width: f32, aspect: f32) -> Option<[f32; 2]> {
     let column = |matrix: &Matrix, index| matrix.0.map(|row| row[index]);
     let forward = column(aim, 2).map(|value| -value);
@@ -169,5 +189,19 @@ mod tests {
             cursor.0,
             [[0., 0., 1., 2.001], [1., 0., 0., 3.5], [0., 1., 0., 4.25]]
         );
+    }
+
+    #[test]
+    fn grabbed_panel_keeps_the_point_under_the_controller_ray() {
+        let start = Matrix([[0., 0., 1., 2.], [0., 1., 0., 1.], [-1., 0., 0., 3.]]);
+        let panel = Matrix([[0., 0., 1., 1.], [0., 1., 0., 0.75], [-1., 0., 0., 3.5]]);
+        let offset = relative_transform(&start, &panel);
+        let uv = hit(&panel, &start, 2., 2.).unwrap();
+        assert_ne!(uv, [0.5, 0.5]);
+        assert_eq!(compose(&start, &offset).0, panel.0);
+
+        let moved = Matrix([[0., -1., 0., 4.], [1., 0., 0., 2.], [0., 0., 1., 5.]]);
+        let grabbed = compose(&moved, &offset);
+        assert_eq!(hit(&grabbed, &moved, 2., 2.), Some(uv));
     }
 }

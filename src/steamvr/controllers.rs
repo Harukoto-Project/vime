@@ -26,6 +26,7 @@ pub struct Actions {
     pub toggle: u64,
     pub aim: u64,
     pub click: u64,
+    pub grab: u64,
     pub close: u64,
     pub hands: [u64; 2],
 }
@@ -50,6 +51,7 @@ impl VrWorker {
         let state = Arc::new(Mutex::new(ControllerState {
             input,
             overlay: Overlay(session.overlay.0),
+            keyboard: session.handle,
             actions,
             cursors: session.cursors.map(|handle| Cursor {
                 handle,
@@ -59,6 +61,8 @@ impl VrWorker {
             size: size.map(|axis| axis as f32),
             width: 1.08,
             panel: None,
+            grab: None,
+            grab_armed: [false; 2],
             filters: Default::default(),
             toggle_armed: false,
             armed: [false; 2],
@@ -181,11 +185,14 @@ impl DisplayTiming {
 pub struct ControllerState {
     input: Input,
     overlay: Overlay,
+    keyboard: u64,
     actions: Actions,
     cursors: [Cursor; 2],
     size: [f32; 2],
     width: f32,
     panel: Option<Matrix>,
+    grab: Option<PanelGrab>,
+    grab_armed: [bool; 2],
     filters: [geometry::PointerFilter; 2],
     toggle_armed: bool,
     armed: [bool; 2],
@@ -193,6 +200,11 @@ pub struct ControllerState {
     pending: bool,
     dashboard_position: Option<[f32; 2]>,
     keyboard_targets: Option<KeyboardTargets>,
+}
+
+struct PanelGrab {
+    hand: usize,
+    offset: Matrix,
 }
 
 impl ControllerState {
@@ -229,6 +241,7 @@ impl ControllerState {
 
     pub fn set_panel(&mut self, panel: Option<Matrix>) {
         self.panel = panel;
+        self.cancel_grab();
         if panel.is_none() {
             self.keyboard_targets = None;
         }
@@ -238,6 +251,11 @@ impl ControllerState {
         self.frame.toggle = false;
         self.frame.keyboard_presses.clear();
         self.clear_pointers();
+    }
+
+    fn cancel_grab(&mut self) {
+        self.grab = None;
+        self.grab_armed = [false; 2];
     }
 
     fn clear_pointers(&mut self) {
@@ -338,6 +356,7 @@ impl ControllerState {
         ) != 0
         {
             self.toggle_armed = false;
+            self.cancel_grab();
             self.clear_pointers();
             return before_down != self.frame.keyboard_down
                 || before_feedback != self.frame.keyboard_feedback;
@@ -347,6 +366,7 @@ impl ControllerState {
         self.frame.toggle |= toggle;
 
         let Some(panel) = panel else {
+            self.cancel_grab();
             self.clear_pointers();
             self.frame.keyboard_presses.clear();
             return toggle
@@ -355,6 +375,15 @@ impl ControllerState {
         };
         let prediction = display.prediction(system);
         let now = Instant::now();
+        let poses = std::array::from_fn(|hand| self.aim_pose(hand, prediction));
+        if toggle || self.poll_grab(&panel, &poses) {
+            self.clear_pointers();
+            return toggle
+                || before_down != self.frame.keyboard_down
+                || before_feedback != self.frame.keyboard_feedback;
+        }
+
+        let aspect = self.size[0] / self.size[1];
         let mut presses = [None; 2];
         for (hand, press) in presses.iter_mut().enumerate() {
             let source = self.actions.hands[hand];
@@ -363,7 +392,15 @@ impl ControllerState {
             let pressed = self.armed[hand] && down;
             self.armed[hand] = click.is_some_and(|data| !data.state);
             self.frame.keyboard_down[hand] = down;
-            let uv = self.pointer_position(hand, &panel, prediction, now);
+            let hit = poses[hand]
+                .as_ref()
+                .and_then(|aim| geometry::hit(&panel, aim, self.width, aspect));
+            let uv = if let Some(uv) = hit {
+                Some(self.filters[hand].update(uv, now, aspect))
+            } else {
+                self.filters[hand].reset();
+                None
+            };
             let feedback = &mut self.frame.keyboard_feedback[hand];
             feedback.hovered = uv.and_then(|uv| self.keyboard_targets.as_ref()?.target(uv));
             if !down || uv.is_none() {
@@ -402,13 +439,53 @@ impl ControllerState {
         pressed
     }
 
-    fn pointer_position(
-        &mut self,
-        hand: usize,
-        panel: &Matrix,
-        prediction: f32,
-        now: Instant,
-    ) -> Option<[f32; 2]> {
+    fn poll_grab(&mut self, panel: &Matrix, poses: &[Option<Matrix>; 2]) -> bool {
+        let grips = self
+            .actions
+            .hands
+            .map(|source| self.digital(self.actions.grab, source));
+        let armed = self.grab_armed;
+        self.grab_armed =
+            std::array::from_fn(|hand| grips[hand].as_ref().is_some_and(|grip| !grip.state));
+        let down = |hand: usize| grips[hand].as_ref().is_some_and(|grip| grip.state);
+
+        if let Some(grab) = &self.grab {
+            if down(grab.hand)
+                && let Some(pose) = &poses[grab.hand]
+            {
+                let moved = geometry::compose(pose, &grab.offset);
+                if self
+                    .overlay
+                    .set_transform(self.keyboard, abi::STANDING, &moved)
+                    == 0
+                {
+                    self.panel = Some(moved);
+                }
+                return true;
+            }
+            self.grab = None;
+            return false;
+        }
+
+        let aspect = self.size[0] / self.size[1];
+        for (hand, pose) in poses.iter().enumerate() {
+            if armed[hand]
+                && down(hand)
+                && let Some(pose) = pose
+                && geometry::hit(panel, pose, self.width, aspect).is_some()
+            {
+                // Keep the controller-to-panel offset from the moment of the grab.
+                self.grab = Some(PanelGrab {
+                    hand,
+                    offset: geometry::relative_transform(pose, panel),
+                });
+                return true;
+            }
+        }
+        false
+    }
+
+    fn aim_pose(&self, hand: usize, prediction: f32) -> Option<Matrix> {
         let mut pose = ActionPose::default();
         let code = self.input.aim(
             self.actions.aim,
@@ -418,16 +495,8 @@ impl ControllerState {
             size_of::<ActionPose>() as u32,
             self.actions.hands[hand],
         );
-        let aspect = self.size[0] / self.size[1];
-        if code == 0
-            && pose.active
-            && pose.pose.valid
-            && let Some(uv) = geometry::hit(panel, &pose.pose.transform, self.width, aspect)
-        {
-            return Some(self.filters[hand].update(uv, now, aspect));
-        }
-        self.filters[hand].reset();
-        None
+        (code == 0 && pose.active && pose.pose.valid && pose.pose.connected)
+            .then_some(pose.pose.transform)
     }
 
     fn digital(&self, action: u64, device: u64) -> Option<Digital> {

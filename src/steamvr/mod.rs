@@ -240,6 +240,7 @@ impl SteamVr {
             toggle: action(actions::TOGGLE)?,
             aim: action(actions::AIM)?,
             click: action(actions::CLICK)?,
+            grab: action(actions::GRAB)?,
             close: action(actions::CLOSE)?,
             hands: [hand(c"/user/hand/left")?, hand(c"/user/hand/right")?],
         };
@@ -384,13 +385,15 @@ impl SteamVr {
     }
 
     pub fn hide(&mut self) -> Result<()> {
+        let worker = self.worker.as_ref().unwrap();
+        let mut state = worker.state();
         if self.world_shown {
             checked(self.overlay.hide(self.handle), tr("VRキーボードを閉じる"))?;
             self.world_shown = false;
         }
         self.panel = None;
-        let worker = self.worker.as_ref().unwrap();
-        worker.state().set_panel(None);
+        state.set_panel(None);
+        drop(state);
         worker.wake();
         Ok(())
     }

@@ -12,6 +12,7 @@ pub const POINTER_SET: &std::ffi::CStr = c"/actions/keyboard";
 pub const TOGGLE: &std::ffi::CStr = c"/actions/vime/in/toggle";
 pub const AIM: &std::ffi::CStr = c"/actions/keyboard/in/aim";
 pub const CLICK: &std::ffi::CStr = c"/actions/keyboard/in/click";
+pub const GRAB: &std::ffi::CStr = c"/actions/keyboard/in/grab";
 pub const CLOSE: &std::ffi::CStr = c"/actions/keyboard/in/close";
 const CAPTURE: &str = "/actions/keyboard/in/capture";
 
@@ -48,7 +49,7 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
         ("oculus_touch", "joystick", "joystick"),
         ("vive_controller", "trackpad", "button"),
     ] {
-        let name = format!("binding_{controller}_v4.json");
+        let name = format!("binding_{controller}_v5.json");
         let trigger = |hand: &str| {
             let mut binding = button(hand, "trigger", "button", "click", CLICK.to_str().unwrap());
             binding["parameters"] = json!({
@@ -67,15 +68,18 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
                 _ => unreachable!(),
             };
             for &control in controls {
-                let action =
-                    if (controller, hand, control) == ("vive_controller", "right", "trackpad") {
-                        CLOSE.to_str().unwrap()
-                    } else {
-                        CAPTURE
-                    };
+                let action = match (controller, hand, control) {
+                    (_, _, "grip") => GRAB.to_str().unwrap(),
+                    ("vive_controller", "right", "trackpad") => CLOSE.to_str().unwrap(),
+                    _ => CAPTURE,
+                };
                 let mut binding = button(hand, control, "button", "click", action);
                 if controller == "knuckles" && matches!(control, "grip" | "trackpad") {
                     binding["parameters"] = json!({ "force_input": "force" });
+                }
+                if control == "grip" && controller != "vive_controller" {
+                    binding["parameters"]["click_activate_threshold"] = json!("0.30");
+                    binding["parameters"]["click_deactivate_threshold"] = json!("0.25");
                 }
                 keyboard_sources.push(binding);
             }
@@ -98,7 +102,7 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
                 "app_key": APP_KEY.to_str().unwrap(),
                 "controller_type": controller,
                 "name": "ViME",
-                "description": "Toggle ViME, select keys, and reserve non-joystick controls while typing",
+                "description": "Toggle ViME, select keys, and grab the keyboard",
                 "bindings": {
                     (TOGGLE_SET.to_str().unwrap()): {
                         "sources": [button("right", control, mode, "click", TOGGLE.to_str().unwrap())]
@@ -125,6 +129,7 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
                 { "name": TOGGLE.to_str().unwrap(), "type": "boolean", "requirement": "optional" },
                 { "name": AIM.to_str().unwrap(), "type": "pose", "requirement": "optional" },
                 { "name": CLICK.to_str().unwrap(), "type": "boolean", "requirement": "optional" },
+                { "name": GRAB.to_str().unwrap(), "type": "boolean", "requirement": "optional" },
                 { "name": CLOSE.to_str().unwrap(), "type": "boolean", "requirement": "optional" },
                 { "name": CAPTURE, "type": "boolean", "requirement": "optional" }
             ],
@@ -136,6 +141,7 @@ pub fn write_manifests(directory: &Path) -> io::Result<(PathBuf, PathBuf)> {
                 (TOGGLE.to_str().unwrap()): "Toggle keyboard",
                 (AIM.to_str().unwrap()): "Aim at keyboard",
                 (CLICK.to_str().unwrap()): "Press key",
+                (GRAB.to_str().unwrap()): "Grab keyboard",
                 (CLOSE.to_str().unwrap()): "Close keyboard",
                 (CAPTURE): "Block game input while typing"
             }]
@@ -230,7 +236,7 @@ mod tests {
                 );
                 assert_eq!(
                     input(hand, "grip").unwrap()["inputs"]["click"]["output"],
-                    CAPTURE
+                    GRAB.to_str().unwrap()
                 );
             }
             if default["controller_type"] == "vive_controller" {
