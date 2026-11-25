@@ -38,6 +38,14 @@ const WIDE_LAYOUT: f32 = 640.;
 const MAX_PAGE_WIDTH: f32 = 1080.;
 const HIDDEN_PAINT_RETRY: Duration = Duration::from_millis(50);
 const AUTO_LAUNCH_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const OSC_TYPING_TIMEOUT: Duration = Duration::from_secs(3);
+const OSC_TYPING_REFRESH: Duration = Duration::from_secs(2);
+
+struct OscTyping {
+    port: u16,
+    until: Instant,
+    refresh_at: Instant,
+}
 
 fn uses_osc_query(settings: &Settings) -> bool {
     settings.destination == Destination::Osc && settings.osc_query
@@ -93,6 +101,7 @@ struct App {
     settings: Settings,
     draft: Settings,
     osc_query: Option<Discovery>,
+    osc_typing: Option<OscTyping>,
     hotkeys: Option<Hotkeys>,
     keyboard: Keyboard,
     surfaces: Result<Surfaces, String>,
@@ -231,6 +240,7 @@ impl App {
             directory,
             draft,
             osc_query: start_osc_query(&settings, &creation.egui_ctx),
+            osc_typing: None,
             settings,
             hotkeys,
             keyboard,
@@ -420,9 +430,13 @@ impl App {
         self.world_feedback = Default::default();
         self.draw_errors[0] = None;
         self.world_repeaters = Default::default();
+        if !new_visibility {
+            self.set_osc_typing(None);
+        }
     }
 
     fn disconnect(&mut self) {
+        self.set_osc_typing(None);
         self.vr = None;
         self.steamvr_auto_launch = None;
         self.world_keys = None;
@@ -470,12 +484,68 @@ impl App {
             .configure_translation(&self.settings.translation);
     }
 
+    fn osc_port(&self) -> u16 {
+        self.osc_query
+            .as_ref()
+            .and_then(Discovery::port)
+            .unwrap_or(self.settings.osc_port)
+    }
+
+    fn osc_typing_enabled(&self) -> bool {
+        self.settings.destination == Destination::Osc && self.settings.osc_typing
+    }
+
+    fn set_osc_typing(&mut self, until: Option<Instant>) {
+        let port = self.osc_port();
+        let until = until.filter(|_| self.osc_typing_enabled());
+        if let Some(previous) = &self.osc_typing
+            && (until.is_none() || previous.port != port)
+        {
+            let _ = output::send_osc_typing(previous.port, false);
+            self.osc_typing = None;
+        }
+        let Some(until) = until else { return };
+        let now = Instant::now();
+        match &mut self.osc_typing {
+            Some(typing) => {
+                typing.until = until;
+                if now >= typing.refresh_at {
+                    let _ = output::send_osc_typing(port, true);
+                    typing.refresh_at = now + OSC_TYPING_REFRESH;
+                }
+            }
+            None => {
+                if output::send_osc_typing(port, true).is_ok() {
+                    self.osc_typing = Some(OscTyping {
+                        port,
+                        until,
+                        refresh_at: now + OSC_TYPING_REFRESH,
+                    });
+                }
+            }
+        }
+    }
+
+    fn poll_osc_typing(&mut self, context: &egui::Context, now: Instant) {
+        if let Some(until) = self.osc_typing.as_ref().map(|typing| typing.until) {
+            self.set_osc_typing((until > now).then_some(until));
+            if let Some(typing) = &self.osc_typing {
+                let next = typing.until.min(typing.refresh_at);
+                context.request_repaint_after(next.saturating_duration_since(now));
+            }
+        }
+    }
+
     fn keyboard_action(&mut self, action: Action) {
+        let before = self
+            .osc_typing_enabled()
+            .then(|| self.keyboard.composer.text());
         if !matches!(action, Action::MoveCaret(_)) {
             keyboard::play_click();
         }
         match action {
             Action::Close => {
+                self.set_osc_typing(None);
                 if self.vr.as_ref().is_some_and(SteamVr::visible) {
                     self.toggle();
                 }
@@ -515,12 +585,7 @@ impl App {
                 let text = self.keyboard.composer.text();
                 let sent = match self.settings.destination {
                     Destination::Osc => {
-                        let port = self
-                            .osc_query
-                            .as_ref()
-                            .and_then(Discovery::port)
-                            .unwrap_or(self.settings.osc_port);
-                        output::send_osc(&text, port, self.settings.osc_notify)
+                        output::send_osc(&text, self.osc_port(), self.settings.osc_notify)
                             .map(|_| tr("OSCパケットを送信しました"))
                     }
                     Destination::SteamVrInput => output::send_scene_input(
@@ -540,6 +605,14 @@ impl App {
             Action::ToggleTheme => self.theme_toggle = true,
             Action::CycleTranslationTarget => self.cycle_translation_target(),
             action => self.keyboard.apply(action),
+        }
+        if let Some(before) = before {
+            let after = self.keyboard.composer.text();
+            if before != after {
+                self.set_osc_typing(
+                    (!after.is_empty()).then(|| Instant::now() + OSC_TYPING_TIMEOUT),
+                );
+            }
         }
     }
 
@@ -1097,6 +1170,11 @@ impl App {
                 );
                 widgets::checkbox(ui, &mut self.draft.osc_notify, tr("チャット通知音"));
             });
+            widgets::checkbox(
+                ui,
+                &mut self.draft.osc_typing,
+                tr("入力中状態をVRChatに送信"),
+            );
             tr("VRChat側でOSCを有効にしてください")
         } else {
             tr("VRアプリの入力欄を開き、Windowsで前面にします")
@@ -1782,6 +1860,7 @@ impl eframe::App for App {
             self.keyboard_action(action);
         }
         let now = Instant::now();
+        self.poll_osc_typing(context, now);
         let desktop_minimized = context.input(|input| input.viewport().minimized == Some(true));
         if !desktop_minimized && !self.tray.as_ref().is_some_and(Tray::hidden) {
             context.request_repaint_after(self.keyboard.caret_blink(now).1);
@@ -1831,6 +1910,7 @@ impl eframe::App for App {
             self.toggle_theme(ui.ctx());
         }
         let now = Instant::now();
+        self.poll_osc_typing(ui.ctx(), now);
         self.schedule_vr_deadlines(ui.ctx(), now);
         if let Some(delay) = self.overlay_paint_delay(now) {
             ui.ctx().request_repaint_after(delay);

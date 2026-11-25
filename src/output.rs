@@ -28,9 +28,19 @@ pub fn chat_packet(text: &str, notify: bool) -> io::Result<Vec<u8>> {
 }
 
 pub fn send_osc(text: &str, port: u16, notify: bool) -> io::Result<()> {
-    let packet = chat_packet(text, notify)?;
+    send_osc_packet(&chat_packet(text, notify)?, port)
+}
+
+pub fn send_osc_typing(port: u16, typing: bool) -> io::Result<()> {
+    let mut packet = Vec::new();
+    osc_string(&mut packet, "/chatbox/typing");
+    osc_string(&mut packet, if typing { ",T" } else { ",F" });
+    send_osc_packet(&packet, port)
+}
+
+fn send_osc_packet(packet: &[u8], port: u16) -> io::Result<()> {
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
-    socket.send_to(&packet, SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))?;
+    socket.send_to(packet, SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))?;
     Ok(())
 }
 
@@ -106,6 +116,24 @@ mod tests {
             &buf[..count],
             b"/chatbox/input\0\0,sTF\0\0\0\0\xe7\x8c\xab\xf0\x9f\x8c\xb8\0"
         );
+    }
+
+    #[test]
+    fn sends_typing_on_and_off_as_osc_booleans() {
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let port = receiver.local_addr().unwrap().port();
+        let mut buf = [0; 64];
+        for (typing, expected) in [
+            (true, b"/chatbox/typing\0,T\0\0"),
+            (false, b"/chatbox/typing\0,F\0\0"),
+        ] {
+            send_osc_typing(port, typing).unwrap();
+            let count = receiver.recv(&mut buf).unwrap();
+            assert_eq!(&buf[..count], expected);
+        }
     }
 
     #[test]

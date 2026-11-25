@@ -57,6 +57,18 @@ mod tests {
     }
 
     #[test]
+    fn osc_typing_is_opt_in_and_persists_when_enabled() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("settings.json"), "{}").unwrap();
+        assert!(!Settings::default().osc_typing);
+        let mut settings = Settings::load(directory.path()).unwrap();
+        assert!(!settings.osc_typing);
+        settings.osc_typing = true;
+        settings.save(directory.path()).unwrap();
+        assert!(Settings::load(directory.path()).unwrap().osc_typing);
+    }
+
+    #[test]
     fn is_set_up_once_settings_are_saved_and_proposes_local_cuda_d1() {
         let directory = tempfile::tempdir().unwrap();
         assert!(!Settings::saved(directory.path()));
@@ -559,6 +571,7 @@ pub struct Settings {
     pub osc_query: bool,
     pub osc_port: u16,
     pub osc_notify: bool,
+    pub osc_typing: bool,
     pub hotkey: String,
     pub overlay_width: f32,
     pub keyboard_theme: KeyboardTheme,
@@ -576,6 +589,7 @@ impl Default for Settings {
             osc_query: true,
             osc_port: 9000,
             osc_notify: false,
+            osc_typing: false,
             hotkey: "Ctrl+Shift+F8".into(),
             overlay_width: 1.08,
             keyboard_theme: KeyboardTheme::default(),

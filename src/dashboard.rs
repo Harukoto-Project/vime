@@ -201,6 +201,11 @@ fn settings(
                 }
             });
             widgets::checkbox(output, &mut draft.osc_notify, tr("チャット通知音"));
+            widgets::checkbox(
+                output,
+                &mut draft.osc_typing,
+                tr("入力中状態をVRChatに送信"),
+            );
         } else {
             output.label(tr("VRアプリの入力欄を開き、Windows で前面にします"));
         }

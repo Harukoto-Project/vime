@@ -66,6 +66,7 @@ Windows 開閉ショートカット	Windows toggle shortcut	Windows 열기/닫�
 ダッシュボードの座標を設定	Setting the dashboard coordinates	대시보드 좌표 설정
 ダッシュボードを描画	Rendering the dashboard	대시보드 그리기
 チャット通知音	Chat notification sound	채팅 알림음
+入力中状態をVRChatに送信	Send typing status to VRChat	VRChat에 입력 중 상태 보내기
 トリガーでキーを選択	Pull a trigger to press a key	트리거로 키 선택
 ヘッドセットのトラッキングを取得できません	Could not get headset tracking	헤드셋 트래킹을 가져올 수 없습니다
 メッセージを入力	Type a message	메시지 입력
