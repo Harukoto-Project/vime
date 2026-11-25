@@ -312,8 +312,14 @@ impl Composer {
                 candidates.push(katakana.clone());
             }
             let halfwidth = japanese::halfwidth(&katakana);
+            let ascii_brackets = japanese::with_ascii_brackets(&halfwidth);
             if !candidates.contains(&halfwidth) {
                 candidates.push(halfwidth);
+            }
+            if let Some(value) = ascii_brackets
+                && !candidates.contains(&value)
+            {
+                candidates.push(value);
             }
         }
         candidates

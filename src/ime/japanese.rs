@@ -148,6 +148,8 @@ pub fn key_label(key: char) -> char {
         ',' => '、',
         '.' => '。',
         '-' => 'ー',
+        '[' => '「',
+        ']' => '」',
         '¥' => '￥',
         key if key.is_ascii_punctuation() => char::from_u32(key as u32 + 0xfee0).unwrap(),
         _ => key,
@@ -210,6 +212,12 @@ pub fn halfwidth(value: &str) -> String {
         result.extend(mark);
     }
     result
+}
+
+pub fn with_ascii_brackets(halfwidth: &str) -> Option<String> {
+    halfwidth
+        .contains(['｢', '｣'])
+        .then(|| halfwidth.replace('｢', "[").replace('｣', "]"))
 }
 
 /// Loads the dictionary index now so that the first conversion does not stall.
@@ -403,8 +411,12 @@ fn clause_candidates(reading: &str, best: Option<&str>) -> Vec<String> {
     let katakana = katakana(reading);
     push(&mut candidates, &katakana);
     let halfwidth = halfwidth(&katakana);
+    let ascii_brackets = with_ascii_brackets(&halfwidth);
     if !candidates.contains(&halfwidth) {
         candidates.insert(candidates.len().min(2), halfwidth);
+    }
+    if let Some(value) = ascii_brackets {
+        push(&mut candidates, &value);
     }
     if reading.chars().all(|ch| ch == 'ー') {
         push(&mut candidates, &"-".repeat(reading.chars().count()));

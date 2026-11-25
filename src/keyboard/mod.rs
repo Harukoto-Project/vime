@@ -672,16 +672,17 @@ mod tests {
     fn japanese_symbols_can_be_converted_to_halfwidth() {
         let mut keyboard = Keyboard::new(eframe::egui::Context::default());
         keys(&mut keyboard, "12W,.![]¥");
-        assert_eq!(keyboard.composer.text(), "12W、。！［］￥");
+        assert_eq!(keyboard.composer.text(), "12W、。！「」￥");
         keyboard.apply(Action::Space);
-        assert_eq!(keyboard.composer.text(), "12W、。！［］￥");
+        assert_eq!(keyboard.composer.text(), "12W、。！「」￥");
+        assert!(keyboard.candidates.contains(&"W,.!｢｣¥".into()));
         assert!(keyboard.candidates.contains(&"W,.![]¥".into()));
         keyboard.apply(Action::Candidate("W,.![]¥".into()));
         assert_eq!(keyboard.composer.committed(), "12W,.![]¥");
 
         keyboard.apply(Action::ToggleDirect);
-        keys(&mut keyboard, "Ab9,.!");
-        assert_eq!(keyboard.composer.committed(), "12W,.![]¥Ab9,.!");
+        keys(&mut keyboard, "Ab9,.![]");
+        assert_eq!(keyboard.composer.committed(), "12W,.![]¥Ab9,.![]");
     }
 
     #[test]
